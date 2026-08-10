@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { renderScene, type Camera, type Scene3D } from "@/lib/viz/engine3d";
 import { THEME_CHANGE_EVENT } from "@/lib/theme";
 
@@ -13,7 +13,7 @@ function cssVar(el: HTMLElement, name: string, fallback: string) {
   return v || fallback;
 }
 
-export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) {
+export const Plot3D = memo(function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const camRef = useRef<Camera>({ yaw: -0.75, pitch: 0.42, zoom: 1.02 });
@@ -33,6 +33,7 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
 
     let raf = 0;
     let last = performance.now();
+    let paused = document.hidden;
     // Jam animasi terus berjalan (breathing/jitter/flow) walau kamera di-pause
     // lewat tombol rotate/pause — hanya rotasi kamera yang berhenti, bukan
     // "kehidupan" visualnya.
@@ -54,8 +55,16 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
       };
     };
     window.addEventListener(THEME_CHANGE_EVENT, refreshTheme);
+    const onVisibilityChange = () => {
+      paused = document.hidden;
+      last = performance.now();
+      if (!paused && raf === 0) raf = requestAnimationFrame(draw);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     const draw = (now: number) => {
+      raf = 0;
+      if (paused) return;
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       clock += dt;
@@ -74,10 +83,12 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
       renderScene(ctx, sceneRef.current, camRef.current, w, h, themeRef.current, clock);
       raf = requestAnimationFrame(draw);
     };
-    raf = requestAnimationFrame(draw);
+    if (!paused) raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      raf = 0;
       window.removeEventListener(THEME_CHANGE_EVENT, refreshTheme);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [height]);
 
@@ -99,16 +110,56 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
     dragRef.current = null;
   };
 
+  const onKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const step = e.shiftKey ? 0.18 : 0.08;
+    switch (e.key) {
+      case "ArrowLeft":
+        e.preventDefault();
+        camRef.current.yaw -= step;
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        camRef.current.yaw += step;
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        camRef.current.pitch = Math.min(1.4, camRef.current.pitch + step);
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        camRef.current.pitch = Math.max(-1.4, camRef.current.pitch - step);
+        break;
+      case "+":
+      case "=":
+        e.preventDefault();
+        camRef.current.zoom = Math.min(2.2, camRef.current.zoom * 1.06);
+        break;
+      case "-":
+      case "_":
+        e.preventDefault();
+        camRef.current.zoom = Math.max(0.35, camRef.current.zoom * 0.94);
+        break;
+      case " ":
+        e.preventDefault();
+        setSpin((value) => !value);
+        break;
+    }
+  };
+
   return (
     <div ref={wrapRef} className="relative w-full select-none">
       <canvas
         ref={canvasRef}
-        className="w-full cursor-grab touch-none rounded-lg active:cursor-grabbing"
+        role="img"
+        aria-label="Visualisasi 3D data kuantitatif. Gunakan tombol panah untuk rotasi dan plus atau minus untuk zoom."
+        tabIndex={0}
+        className="w-full cursor-grab touch-none rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary active:cursor-grabbing"
         style={{ height }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerLeave={endDrag}
+        onKeyDown={onKeyDown}
         onWheel={(e) => {
           camRef.current.zoom = Math.max(
             0.35,
@@ -118,6 +169,8 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
       />
       <button
         type="button"
+        aria-label={spin ? "Jeda rotasi visualisasi 3D" : "Mulai rotasi visualisasi 3D"}
+        aria-pressed={spin}
         onClick={() => setSpin((s) => !s)}
         className="absolute right-2 top-2 rounded border border-border/60 bg-card/70 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
       >
@@ -125,4 +178,4 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
       </button>
     </div>
   );
-}
+});
