@@ -1,7 +1,7 @@
 /** Pembentuk Scene3D untuk tiap model matematika. */
 
 import type { Scene3D, Vec3 } from "./engine3d";
-import { extent, makeScaler } from "./engine3d";
+import { extent, makeScaler, phaseOf } from "./engine3d";
 import type { Palette } from "./palette";
 import type { MonteCarloResult } from "@/lib/quant/stochastic";
 import type { FrontierPoint } from "@/lib/quant/portfolio";
@@ -42,19 +42,30 @@ export function monteCarloScene(
     });
   }
 
-  const bandLine = (band: number[], color: string, width: number, alpha: number) => {
+  const points: Scene3D["points"] = [];
+  const bandLine = (
+    band: number[],
+    color: string,
+    width: number,
+    alpha: number,
+    phase: number,
+  ) => {
     const pts: Vec3[] = [];
     for (let t = 0; t <= steps; t += Math.max(1, Math.floor(steps / 80)))
       pts.push([sx(t), sy(band[t]!), 0]);
     pts.push([sx(steps), sy(band[steps]!), 0]);
-    lines.push({ pts, color, width, alpha });
+    // Garis mengalir: dash marching di sepanjang pita, arah mengikuti waktu.
+    lines.push({ pts, color, width, alpha, flow: true, flowSpeed: 0.8 });
+    // Titik berpendar di ujung pita (nilai proyeksi saat ini).
+    points.push({ p: pts[pts.length - 1]!, color, size: 2.6, alpha: 1, glow: true, phase });
   };
-  bandLine(mc.bands.p50, palette.accent, 2.2, 1);
-  bandLine(mc.bands.p95, palette.series[0]!, 1.4, 0.9);
-  bandLine(mc.bands.p05, palette.series[0]!, 1.4, 0.9);
+  bandLine(mc.bands.p50, palette.accent, 2.2, 1, 0.15);
+  bandLine(mc.bands.p95, palette.series[0]!, 1.4, 0.9, 0.5);
+  bandLine(mc.bands.p05, palette.series[0]!, 1.4, 0.9, 0.85);
 
   return {
     lines,
+    points,
     axisLabels: ["Waktu", "Harga", "Simulasi #"],
     ticks: [
       { pos: [1.02, sy(mc.bands.p95[steps]!), 0], text: "P95" },
@@ -91,6 +102,7 @@ export function volSurfaceScene(
         color: t > 0.66 ? palette.bear : t > 0.33 ? palette.accent : palette.series[0]!,
         alpha: 0.55,
         stroke: palette.grid,
+        pulse: phaseOf(i * (moneyness.length - 1) + j),
       });
     }
   }
@@ -132,6 +144,9 @@ export function hmmScene(
     color: stateColor(d.state),
     size: 1.7,
     alpha: 0.85,
+    glow: true,
+    jitter: 0.018,
+    phase: phaseOf(i),
   }));
 
   const lines: Scene3D["lines"] = [];
@@ -140,12 +155,14 @@ export function hmmScene(
   data.forEach((d, i) => {
     const p: Vec3 = [sx(d.ret), sy(d.vol), sz(i)];
     if (d.state !== runState) {
-      if (run.length > 1) lines.push({ pts: run, color: stateColor(runState), width: 1, alpha: 0.35 });
+      if (run.length > 1)
+        lines.push({ pts: run, color: stateColor(runState), width: 1, alpha: 0.35, flow: true, flowSpeed: 0.5 });
       run = [p];
       runState = d.state;
     } else run.push(p);
   });
-  if (run.length > 1) lines.push({ pts: run, color: stateColor(runState), width: 1, alpha: 0.35 });
+  if (run.length > 1)
+    lines.push({ pts: run, color: stateColor(runState), width: 1, alpha: 0.35, flow: true, flowSpeed: 0.5 });
 
   return { points, lines, axisLabels: ["Return", "Volatilitas", "Waktu"] };
 }
@@ -179,6 +196,7 @@ export function frontierScene(
         ],
         color: (w0 + w1) / 2 >= 0 ? palette.series[j % palette.series.length]! : palette.bear,
         alpha: Math.min(0.85, 0.12 + Math.abs((w0 + w1) / 2) * 0.9),
+        pulse: phaseOf(i * n + j),
       });
     }
   }
@@ -186,7 +204,7 @@ export function frontierScene(
   const curve: Vec3[] = frontier.map((f) => [sx(f.risk), sy(f.ret), 0]);
   return {
     quads,
-    lines: [{ pts: curve, color: palette.accent, width: 2.2, alpha: 1 }],
+    lines: [{ pts: curve, color: palette.accent, width: 2.2, alpha: 1, flow: true, flowSpeed: 1.1 }],
     axisLabels: ["Risk σ", "Return μ", "Aset"],
     ticks: labels.map((l, j) => ({ pos: [-1.12, -1, zOf(j)] as Vec3, text: l })),
   };
@@ -217,6 +235,9 @@ export function pcaScene(
       color: color(states[i]),
       size: 1.8,
       alpha: 0.8,
+      glow: true,
+      jitter: 0.016,
+      phase: phaseOf(i),
     })),
     axisLabels: ["PC1", "PC2", "PC3"],
   };
