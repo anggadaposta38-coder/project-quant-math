@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { getInitialThemeScript } from "../lib/theme";
 
 function NotFoundComponent() {
   return (
@@ -106,6 +107,9 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
+        {/* Dijalankan sebelum hydration agar tidak ada flash tema salah
+            saat halaman dimuat (baca preferensi light/dark tersimpan). */}
+        <script dangerouslySetInnerHTML={{ __html: getInitialThemeScript() }} />
         <HeadContent />
       </head>
       <body>
