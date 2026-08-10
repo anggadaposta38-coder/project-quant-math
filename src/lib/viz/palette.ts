@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { THEME_CHANGE_EVENT } from "@/lib/theme";
 
 export interface Palette {
   bull: string;
@@ -34,16 +35,23 @@ export function usePalette(): Palette {
   const [palette, setPalette] = useState<Palette>(FALLBACK);
 
   useEffect(() => {
-    const cs = getComputedStyle(document.documentElement);
-    const read = (name: string, fb: string) => cs.getPropertyValue(name).trim() || fb;
-    setPalette({
-      bull: read("--viz-bull", FALLBACK.bull),
-      bear: read("--viz-bear", FALLBACK.bear),
-      neutral: read("--viz-neutral", FALLBACK.neutral),
-      accent: read("--viz-accent", FALLBACK.accent),
-      grid: read("--chart-grid", FALLBACK.grid),
-      series: VAR_NAMES.map((n, i) => read(n, FALLBACK.series[i] ?? FALLBACK.accent)),
-    });
+    const readAll = () => {
+      const cs = getComputedStyle(document.documentElement);
+      const read = (name: string, fb: string) => cs.getPropertyValue(name).trim() || fb;
+      setPalette({
+        bull: read("--viz-bull", FALLBACK.bull),
+        bear: read("--viz-bear", FALLBACK.bear),
+        neutral: read("--viz-neutral", FALLBACK.neutral),
+        accent: read("--viz-accent", FALLBACK.accent),
+        grid: read("--chart-grid", FALLBACK.grid),
+        series: VAR_NAMES.map((n, i) => read(n, FALLBACK.series[i] ?? FALLBACK.accent)),
+      });
+    };
+    readAll();
+    // Re-read saat tema di-toggle (light/dark) — tanpa ini, warna 3D akan
+    // tetap memakai palet tema lama sampai halaman di-reload.
+    window.addEventListener(THEME_CHANGE_EVENT, readAll);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, readAll);
   }, []);
 
   return palette;
