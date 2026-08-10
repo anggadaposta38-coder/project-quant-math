@@ -104,6 +104,63 @@
   --grid-line: oklch(0.79 0.13 208 / 0.05);
 }
 
+/*
+ * Tema terang. Struktur token identik dengan :root (dark) di atas — hanya
+ * lightness/chroma yang disesuaikan agar kontras tetap terjaga di atas
+ * latar putih. Diaktifkan lewat class .light di elemen <html> (lihat
+ * src/lib/theme.ts). Token warna visualisasi (--viz-*) sengaja dibuat lebih
+ * gelap/jenuh dari versi dark-nya karena warna pastel yang enak dilihat di
+ * navy gelap akan pudar/kontras rendah di atas putih.
+ */
+.light {
+  --background: oklch(0.985 0.004 250);
+  --foreground: oklch(0.22 0.02 253);
+  --surface: oklch(0.97 0.006 253);
+  --surface-2: oklch(0.94 0.008 253);
+  --card: oklch(0.98 0.005 253);
+  --card-foreground: oklch(0.22 0.02 253);
+  --popover: oklch(0.99 0.003 253);
+  --popover-foreground: oklch(0.22 0.02 253);
+
+  --primary: oklch(0.55 0.14 208);
+  --primary-foreground: oklch(0.99 0.003 253);
+  --secondary: oklch(0.93 0.01 253);
+  --secondary-foreground: oklch(0.26 0.02 253);
+  --muted: oklch(0.94 0.008 253);
+  --muted-foreground: oklch(0.46 0.02 253);
+  --accent: oklch(0.55 0.15 78);
+  --accent-foreground: oklch(0.99 0.003 253);
+  --destructive: oklch(0.55 0.2 17);
+  --destructive-foreground: oklch(0.99 0.003 253);
+
+  --border: oklch(0.88 0.012 253);
+  --input: oklch(0.88 0.012 253);
+  --ring: oklch(0.55 0.14 208);
+
+  --bull: oklch(0.55 0.15 158);
+  --bear: oklch(0.55 0.19 15);
+  --flat: oklch(0.5 0.02 253);
+
+  /* Token visualisasi (dibaca oleh mesin render 3D) — versi kontras-tinggi. */
+  --viz-1: #0284c7;
+  --viz-2: #b45309;
+  --viz-3: #7c3aed;
+  --viz-4: #059669;
+  --viz-5: #c2410c;
+  --viz-6: #4338ca;
+  --viz-7: #be123c;
+  --viz-8: #0369a1;
+  --viz-bull: #16a34a;
+  --viz-bear: #dc2626;
+  --viz-neutral: #64748b;
+  --viz-accent: #b45309;
+  --chart-grid: #d8dee8;
+  --chart-axis: #475569;
+
+  --glow-primary: 0 0 0 1px oklch(0.55 0.14 208 / 0.2), 0 0 24px oklch(0.55 0.14 208 / 0.08);
+  --grid-line: oklch(0.55 0.14 208 / 0.06);
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
