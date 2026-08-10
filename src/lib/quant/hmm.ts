@@ -25,6 +25,33 @@ export interface HmmFit {
   viterbi: number[];
   logLikelihood: number;
   iterations: number;
+  /** true jika kriteria konvergensi tercapai sebelum maxIter. */
+  converged: boolean;
+  /** log-likelihood pada setiap E-step, untuk audit monotonicity EM. */
+  logLikelihoodHistory: number[];
+}
+
+/**
+ * Canonical state ordering: lowest emission mean first (Bear → Bull).
+ *
+ * HMM state IDs are intrinsically arbitrary: a valid EM solution can call
+ * the same latent state 0, 1, or 2.  Never expose raw EM indices as regime
+ * identities.  We therefore canonicalize by emission mean after every fit.
+ * Sigma is only a deterministic tie-breaker when means are indistinguishable.
+ */
+export function canonicalizeHmmParams(p: HmmParams): HmmParams {
+  const K = p.pi.length;
+  const order = p.mu
+    .map((mu, i) => ({ mu, sigma: p.sigma[i] ?? Infinity, i }))
+    .sort((a, b) => a.mu - b.mu || a.sigma - b.sigma || a.i - b.i)
+    .map((x) => x.i);
+
+  return {
+    pi: order.map((i) => p.pi[i]!),
+    A: order.map((i) => order.map((j) => p.A[i]![j]!)),
+    mu: order.map((i) => p.mu[i]!),
+    sigma: order.map((i) => p.sigma[i]!),
+  };
 }
 
 /** Inisialisasi state dengan memotong data pada kuantil (deterministik). */
@@ -144,6 +171,10 @@ export function viterbi(obs: number[], p: HmmParams): number[] {
 
 /** Baum-Welch. K = jumlah regime tersembunyi. */
 export function fitHmm(obs: number[], K = 3, maxIter = 120, tol = 1e-7): HmmFit {
+  if (!Number.isInteger(K) || K < 2) throw new Error("HMM membutuhkan K integer >= 2.");
+  if (!Number.isInteger(maxIter) || maxIter < 1) throw new Error("maxIter harus integer >= 1.");
+  if (!Number.isFinite(tol) || tol <= 0) throw new Error("tol harus finite dan > 0.");
+  if (obs.some((v) => !Number.isFinite(v))) throw new Error("Observasi HMM harus finite.");
   const T = obs.length;
   if (T < K * 5) {
     const p = initParams(obs.length ? obs : [0], K);
@@ -153,6 +184,8 @@ export function fitHmm(obs: number[], K = 3, maxIter = 120, tol = 1e-7): HmmFit 
       viterbi: new Array<number>(T).fill(0),
       logLikelihood: 0,
       iterations: 0,
+      converged: false,
+      logLikelihoodHistory: [],
     };
   }
 
@@ -161,12 +194,20 @@ export function fitHmm(obs: number[], K = 3, maxIter = 120, tol = 1e-7): HmmFit 
   let gamma: number[][] = [];
   let iterations = 0;
   let logL = -Infinity;
+  let converged = false;
+  const logLikelihoodHistory: number[] = [];
+  const llDecreaseTol = Math.max(tol * 10, 1e-10);
 
   for (let iter = 0; iter < maxIter; iter++) {
     iterations = iter + 1;
     const { alpha, c, logL: ll } = forward(obs, p);
     const beta = backward(obs, p, c);
     logL = ll;
+    if (!Number.isFinite(logL)) throw new Error("HMM menghasilkan log-likelihood non-finite.");
+    logLikelihoodHistory.push(logL);
+    if (Number.isFinite(prevLogL) && logL < prevLogL - llDecreaseTol * Math.max(1, Math.abs(prevLogL))) {
+      throw new Error("HMM EM tidak monoton: log-likelihood turun di luar toleransi numerik.");
+    }
 
     // E-step: γ_t(j) ∝ α̂_t(j)·β̂_t(j)
     gamma = Array.from({ length: T }, () => new Array<number>(K).fill(0));
@@ -228,30 +269,59 @@ export function fitHmm(obs: number[], K = 3, maxIter = 120, tol = 1e-7): HmmFit 
     }
 
     p = { pi, A, mu, sigma };
-    if (Math.abs(logL - prevLogL) < tol * Math.max(1, Math.abs(prevLogL))) break;
+    if (Number.isFinite(prevLogL) && Math.abs(logL - prevLogL) < tol * Math.max(1, Math.abs(prevLogL))) {
+      converged = true;
+      prevLogL = logL;
+      break;
+    }
     prevLogL = logL;
   }
 
-  // Urutkan state berdasarkan μ (bear → sideways → bull) agar label stabil.
-  const order = p.mu.map((m, i) => ({ m, i })).sort((a, b) => a.m - b.m).map((o) => o.i);
-  const remap = new Array<number>(K).fill(0);
-  order.forEach((orig, newIdx) => (remap[orig] = newIdx));
-
-  const sorted: HmmParams = {
-    pi: order.map((i) => p.pi[i]!),
-    A: order.map((i) => order.map((j) => p.A[i]![j]!)),
-    mu: order.map((i) => p.mu[i]!),
-    sigma: order.map((i) => p.sigma[i]!),
-  };
-  const sortedGamma = gamma.map((row) => order.map((i) => row[i]!));
-  const path = viterbi(obs, p).map((s) => remap[s]!);
+  // Canonicalize state IDs because HMM labels are arbitrary.
+  // This prevents numerical/EM label switching from changing Bear/Sideways/Bull
+  // merely because the optimizer happened to name equivalent states differently.
+  const sorted = canonicalizeHmmParams(p);
+  // Validate the final EM solution before exposing it. EM can collapse a
+  // state or produce a numerically degenerate transition row on pathological
+  // samples; fail closed instead of returning a plausible-looking regime.
+  const rowSumsOk = sorted.A.every((row) => {
+    const sum = row.reduce((a, b) => a + b, 0);
+    return row.every((v) => Number.isFinite(v) && v >= 0) && Math.abs(sum - 1) < 1e-8;
+  });
+  const piSum = sorted.pi.reduce((a, b) => a + b, 0);
+  if (!rowSumsOk || sorted.pi.some((v) => !Number.isFinite(v) || v < 0) || Math.abs(piSum - 1) >= 1e-8 ||
+      sorted.mu.some((v) => !Number.isFinite(v)) || sorted.sigma.some((v) => !Number.isFinite(v) || v <= 0)) {
+    throw new Error("HMM menghasilkan parameter akhir yang tidak valid.");
+  }
+  // Recompute posterior probabilities after the final M-step and state sort.
+  // Sebelumnya `gamma` masih berasal dari parameter sebelum M-step terakhir,
+  // sehingga regime probabilities yang dikonsumsi UI/backtest tidak persis
+  // konsisten dengan `params` dan Viterbi final.
+  const finalForward = forward(obs, sorted);
+  const finalBackward = backward(obs, sorted, finalForward.c);
+  const sortedGamma = Array.from({ length: T }, () => new Array<number>(K).fill(0));
+  for (let t = 0; t < T; t++) {
+    let s = 0;
+    for (let j = 0; j < K; j++) {
+      sortedGamma[t]![j] = finalForward.alpha[t]![j]! * finalBackward[t]![j]!;
+      s += sortedGamma[t]![j]!;
+    }
+    if (s > 0) {
+      for (let j = 0; j < K; j++) sortedGamma[t]![j]! /= s;
+    } else {
+      for (let j = 0; j < K; j++) sortedGamma[t]![j] = 1 / K;
+    }
+  }
+  const path = viterbi(obs, sorted);
 
   return {
     params: sorted,
     gamma: sortedGamma,
     viterbi: path,
-    logLikelihood: logL,
+    logLikelihood: finalForward.logL,
     iterations,
+    converged,
+    logLikelihoodHistory,
   };
 }
 

@@ -5,23 +5,45 @@
 
 export function mean(x: number[]): number {
   if (x.length === 0) return 0;
+  if (x.some((v) => !Number.isFinite(v))) throw new Error("Input statistik mengandung NaN/Infinity.");
   let s = 0;
   for (const v of x) s += v;
-  return s / x.length;
+  const out = s / x.length;
+  if (!Number.isFinite(out)) throw new Error("Mean menghasilkan NaN/Infinity.");
+  return out;
 }
 
-/** Varians sampel (unbiased, pembagi n-1). */
+/** Varians sampel (unbiased, pembagi n-1), dihitung dengan Welford. */
 export function variance(x: number[]): number {
   const n = x.length;
   if (n < 2) return 0;
-  const m = mean(x);
-  let s = 0;
-  for (const v of x) s += (v - m) * (v - m);
-  return s / (n - 1);
+  if (x.some((v) => !Number.isFinite(v))) throw new Error("Input statistik mengandung NaN/Infinity.");
+  let count = 0;
+  let m = 0;
+  let m2 = 0;
+  for (const v of x) {
+    count += 1;
+    const delta = v - m;
+    m += delta / count;
+    const delta2 = v - m;
+    m2 += delta * delta2;
+  }
+  const out = m2 / (n - 1);
+  if (!Number.isFinite(out) || out < 0) throw new Error("Variance menghasilkan NaN/Infinity atau nilai negatif.");
+  return out;
 }
 
 export function stdev(x: number[]): number {
   return Math.sqrt(variance(x));
+}
+
+/** Annualized sample volatility from per-bar returns. */
+export function annualizedVolatility(returns: number[], barsPerYear: number): number {
+  if (!Number.isFinite(barsPerYear) || barsPerYear <= 0) throw new Error("barsPerYear harus finite dan > 0.");
+  if (returns.length < 2) return 0;
+  const out = stdev(returns) * Math.sqrt(barsPerYear);
+  if (!Number.isFinite(out)) throw new Error("Volatilitas annualized menghasilkan NaN/Infinity.");
+  return out;
 }
 
 export function skewness(x: number[]): number {
@@ -51,6 +73,8 @@ export function kurtosis(x: number[]): number {
 
 export function quantile(sorted: number[], p: number): number {
   if (sorted.length === 0) return NaN;
+  if (!Number.isFinite(p) || p < 0 || p > 1) throw new Error("Probabilitas quantile harus berada pada [0,1].");
+  if (sorted.some((v) => !Number.isFinite(v))) throw new Error("Data quantile mengandung NaN/Infinity.");
   if (sorted.length === 1) return sorted[0]!;
   const h = (sorted.length - 1) * p;
   const lo = Math.floor(h);
@@ -76,7 +100,12 @@ export function logReturns(prices: number[]): number[] {
   for (let i = 1; i < prices.length; i++) {
     const a = prices[i - 1]!;
     const b = prices[i]!;
-    if (a > 0 && b > 0) out.push(Math.log(b / a));
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) {
+      throw new Error("Harga untuk log-return harus finite dan > 0.");
+    }
+    const r = Math.log(b / a);
+    if (!Number.isFinite(r)) throw new Error("Log-return menghasilkan NaN/Infinity.");
+    out.push(r);
   }
   return out;
 }
@@ -121,7 +150,8 @@ export function gaussPdf(x: number, mu: number, sigma: number): number {
 // ---------------------------------------------------------------------------
 
 export function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
+  if (!Number.isFinite(seed)) throw new Error("Seed RNG harus finite.");
+  let a = Math.trunc(seed) >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
@@ -129,6 +159,16 @@ export function mulberry32(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/** Stable 32-bit seed from text; independent of runtime/platform hash behavior. */
+export function stableSeed(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 /** Box-Muller: 1 sampel normal standar dari 2 uniform. */
@@ -177,6 +217,9 @@ export function quadForm(A: Matrix, v: number[]): number {
 export function covarianceMatrix(R: Matrix): Matrix {
   const T = R.length;
   const N = T > 0 ? R[0]!.length : 0;
+  if (T > 0 && (N === 0 || R.some((row) => row.length !== N || row.some((v) => !Number.isFinite(v))))) {
+    throw new Error("Return matrix untuk kovarians tidak valid.");
+  }
   const S = zeros(N, N);
   if (T < 2) return S;
   const mu = new Array<number>(N).fill(0);
@@ -195,26 +238,76 @@ export function covarianceMatrix(R: Matrix): Matrix {
 
 export function correlationFromCov(S: Matrix): Matrix {
   const n = S.length;
+  if (S.some((r) => r.length !== n || r.some((v) => !Number.isFinite(v)))) {
+    throw new Error("Matriks kovarians tidak valid.");
+  }
   const C = zeros(n, n);
+  const sd = S.map((row, i) => Math.sqrt(Math.max(row[i]!, 0)));
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
-      const d = Math.sqrt(Math.max(S[i]![i]!, 1e-18) * Math.max(S[j]![j]!, 1e-18));
-      C[i]![j] = S[i]![j]! / d;
+      if (sd[i] === 0 || sd[j] === 0) {
+        C[i]![j] = i === j ? 1 : 0;
+      } else {
+        C[i]![j] = S[i]![j]! / (sd[i]! * sd[j]!);
+      }
     }
   }
   return C;
 }
 
+/**
+ * Proyeksi simetris ke cone positive-semidefinite dengan eigenvalue flooring.
+ * Dipakai sebelum inversi kovarians agar eigenvalue negatif akibat round-off
+ * atau matriks empiris yang nyaris singular tidak menghasilkan portfolio
+ * dengan varians negatif / inverse yang sangat tidak stabil.
+ */
+export function nearestPsd(S: Matrix, minEigenFraction = 1e-10): Matrix {
+  const n = S.length;
+  if (n === 0 || S.some((r) => r.length !== n || r.some((v) => !Number.isFinite(v)))) {
+    throw new Error("Matriks untuk PSD projection tidak valid.");
+  }
+  const sym = zeros(n, n);
+  let scale = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j < n; j++) {
+      const v = 0.5 * (S[i]![j]! + S[j]![i]!);
+      sym[i]![j] = v;
+      sym[j]![i] = v;
+    }
+    scale = Math.max(scale, Math.abs(sym[i]![i]!));
+  }
+  const floor = Math.max(scale, 1e-18) * Math.max(minEigenFraction, 0);
+  const { values, vectors } = jacobiEigen(sym);
+  const out = zeros(n, n);
+  for (let k = 0; k < n; k++) {
+    const lambda = Math.max(values[k]!, floor);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        out[i]![j] += lambda * vectors[i]![k]! * vectors[j]![k]!;
+      }
+    }
+  }
+  return out;
+}
+
 /** Inverse via Gauss-Jordan dengan partial pivoting. null jika singular. */
 export function inverse(A: Matrix): Matrix | null {
   const n = A.length;
+  if (n === 0 || A.some((r) => r.length !== n || r.some((v) => !Number.isFinite(v)))) return null;
+  let scale = 0;
+  for (const row of A) for (const v of row) scale = Math.max(scale, Math.abs(v));
+  if (scale === 0) return null;
+  // Toleransi pivot harus relatif terhadap skala matriks. Batas absolut 1e-14
+  // membuat matriks kovarians yang sah tetapi kecil (mis. return harian)
+  // dianggap singular.
+  const pivotTol = Number.EPSILON * Math.max(1, n) * scale * 100;
   const M = A.map((r, i) => [...r, ...identity(n)[i]!]);
   for (let col = 0; col < n; col++) {
     let piv = col;
     for (let r = col + 1; r < n; r++) {
       if (Math.abs(M[r]![col]!) > Math.abs(M[piv]![col]!)) piv = r;
     }
-    if (Math.abs(M[piv]![col]!) < 1e-14) return null;
+    if (Math.abs(M[piv]![col]!) <= pivotTol) return null;
     if (piv !== col) {
       const tmp = M[piv]!;
       M[piv] = M[col]!;
@@ -237,9 +330,13 @@ export function ridge(S: Matrix, lambda = 1e-6): Matrix {
   const n = S.length;
   let tr = 0;
   for (let i = 0; i < n; i++) tr += S[i]![i]!;
-  const avg = n > 0 ? tr / n : 1;
+  // Jangan biarkan skala regularisasi ikut menjadi ~0 hanya karena matriks
+  // kovarians hampir singular. `avg || 1` tidak cukup: nilai 1e-30 tetap truthy
+  // dan membuat ridge praktis tidak menambah apa-apa.
+  const avg = n > 0 ? tr / n : 0;
+  const scale = Math.max(Math.abs(avg), 1e-12);
   const out = S.map((r) => [...r]);
-  for (let i = 0; i < n; i++) out[i]![i]! += lambda * (avg || 1);
+  for (let i = 0; i < n; i++) out[i]![i]! += lambda * scale;
   return out;
 }
 

@@ -8,7 +8,9 @@ import { mean, stdev } from "./stats";
  */
 export function ema(x: number[], period: number): number[] {
   const out = new Array<number>(x.length).fill(NaN);
-  if (x.length < period || period < 1) return out;
+  if (!Number.isInteger(period) || period < 1) throw new Error("EMA period harus integer >= 1.");
+  if (x.some((v) => !Number.isFinite(v))) throw new Error("EMA input harus finite.");
+  if (x.length < period) return out;
   const alpha = 2 / (period + 1);
   let prev = mean(x.slice(0, period));
   out[period - 1] = prev;
@@ -32,6 +34,9 @@ export function macd(
   slow = 26,
   signalPeriod = 9,
 ): MacdResult {
+  if (!Number.isInteger(fast) || !Number.isInteger(slow) || !Number.isInteger(signalPeriod) || fast < 1 || slow < 1 || signalPeriod < 1 || fast >= slow) {
+    throw new Error("MACD periods harus integer positif dengan fast < slow.");
+  }
   const ef = ema(x, fast);
   const es = ema(x, slow);
   const line = x.map((_, i) =>
@@ -58,6 +63,8 @@ export function macd(
  */
 export function rsi(prices: number[], period = 14): number[] {
   const out = new Array<number>(prices.length).fill(NaN);
+  if (!Number.isInteger(period) || period < 1) throw new Error("RSI period harus integer >= 1.");
+  if (prices.some((v) => !Number.isFinite(v))) throw new Error("RSI input harus finite.");
   if (prices.length <= period) return out;
 
   let gain = 0;
@@ -69,7 +76,7 @@ export function rsi(prices: number[], period = 14): number[] {
   }
   let avgGain = gain / period;
   let avgLoss = loss / period;
-  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  out[period] = avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - 100 / (1 + avgGain / avgLoss);
 
   for (let i = period + 1; i < prices.length; i++) {
     const d = prices[i]! - prices[i - 1]!;
@@ -77,7 +84,7 @@ export function rsi(prices: number[], period = 14): number[] {
     const l = d < 0 ? -d : 0;
     avgGain = (avgGain * (period - 1) + g) / period;
     avgLoss = (avgLoss * (period - 1) + l) / period;
-    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    out[i] = avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - 100 / (1 + avgGain / avgLoss);
   }
   return out;
 }
@@ -85,6 +92,8 @@ export function rsi(prices: number[], period = 14): number[] {
 /** Z-score bergulir: Z_t = (P_t − μ_roll) / σ_roll */
 export function rollingZScore(x: number[], window = 50): number[] {
   const out = new Array<number>(x.length).fill(NaN);
+  if (!Number.isInteger(window) || window < 2) throw new Error("Z-score window harus integer >= 2.");
+  if (x.some((v) => !Number.isFinite(v))) throw new Error("Z-score input harus finite.");
   for (let i = window - 1; i < x.length; i++) {
     const w = x.slice(i - window + 1, i + 1);
     const s = stdev(w);

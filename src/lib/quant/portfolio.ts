@@ -18,6 +18,7 @@ import {
   matVec,
   quadForm,
   ridge,
+  nearestPsd,
   shrinkageWeight,
   type Matrix,
 } from "./stats";
@@ -73,35 +74,60 @@ export function analyzePortfolio(
 ): PortfolioAnalysis {
   const T = R.length;
   const N = T > 0 ? R[0]!.length : 0;
-  const covBar = covarianceMatrix(R);
-  // Anualisasi: Σ_annual = Σ_bar · barsPerYear ; μ_annual = μ_bar · barsPerYear
-  const cov = covBar.map((row) => row.map((v) => v * barsPerYear));
+  if (N === 0) throw new Error("Portfolio membutuhkan minimal satu aset.");
+  if (!Number.isFinite(barsPerYear) || barsPerYear <= 0) {
+    throw new Error("barsPerYear harus finite dan > 0.");
+  }
+  if (!Number.isFinite(riskFree)) throw new Error("riskFree harus finite.");
+  if (!Number.isInteger(points) || points < 2) throw new Error("points harus integer >= 2.");
+  if (T < 2 || R.some((row) => row.length !== N || row.some((v) => !Number.isFinite(v)))) {
+    throw new Error("Return matrix tidak valid atau terlalu pendek.");
+  }
+  // Markowitz memakai return aritmetik (simple return), bukan log-return.
+  // Input tetap berupa log-return sesuai kontrak API, tetapi mean dan kovarians
+  // dikonversi ke simple return sebelum annualization agar risk/return dan
+  // risk-free rate berada dalam unit yang sama. Menggunakan m + σ²/2 langsung
+  // di sini mencampur drift GBM kontinu dengan expected simple return.
+  const simpleR: Matrix = R.map((row) => row.map((r) => Math.expm1(r)));
+  const covBar = covarianceMatrix(simpleR);
+  const rawCov = covBar.map((row) => row.map((v) => v * barsPerYear));
+  const cov = nearestPsd(rawCov, 1e-10);
   const corr = correlationFromCov(cov);
+  if (cov.some((row, i) => row[i]! <= 0 || row.some((v) => !Number.isFinite(v)))) {
+    throw new Error("Kovarians portfolio harus positive-definite setelah regularisasi.");
+  }
 
   const muBar = new Array<number>(N).fill(0);
-  for (let t = 0; t < T; t++) for (let j = 0; j < N; j++) muBar[j]! += R[t]![j]! / (T || 1);
-  // μ aritmetik tahunan dari log-return: μ = m·bpy + σ²/2.
-  // Bagian mean (m·bpy) di-shrink ke 0 berdasarkan jumlah tahun data yang
-  // tersedia — sama seperti fitGbm — agar alokasi Markowitz tidak "all-in"
-  // ke satu aset hanya karena noise mean-estimation sampel pendek yang
-  // teramplifikasi anualisasi. Koreksi Itô (σ²/2) tidak di-shrink karena
-  // diturunkan dari varians yang jauh lebih stabil.
+  for (let t = 0; t < T; t++) {
+    for (let j = 0; j < N; j++) muBar[j]! += simpleR[t]![j]! / (T || 1);
+  }
+  // Shrink expected simple return toward 0 berdasarkan panjang sampel agar
+  // estimasi mean tidak mendorong bobot ekstrem pada sampel pendek.
   const years = (T || 0) / barsPerYear;
   const w = shrinkageWeight(years);
-  const mu = muBar.map((m, j) => m * barsPerYear * w + 0.5 * cov[j]![j]!);
+  const mu = muBar.map((m) => m * barsPerYear * w);
 
-  const Sinv = inverse(ridge(cov, 1e-4)) ?? inverse(ridge(cov, 1e-2))!;
-  const { A, B } = scalars(Sinv, mu);
+  // PSD projection menghilangkan eigenvalue negatif; ridge kemudian memberi
+  // margin numerik tambahan agar inverse tidak sensitif terhadap eigenvalue kecil.
+  const Sinv = inverse(ridge(cov, 1e-4)) ?? inverse(ridge(cov, 1e-2));
+  if (!Sinv) throw new Error("Matriks kovarians tidak dapat diinversi.");
+  if (Sinv.some((row) => row.some((v) => !Number.isFinite(v)))) throw new Error("Inverse covariance menghasilkan NaN/Infinity.");
+  const { A, B, C, D } = scalars(Sinv, mu);
+  if (![A, B, C, D].every(Number.isFinite) || A <= 0 || D <= 0) {
+    throw new Error("Kovarians terlalu degeneratif untuk efficient frontier.");
+  }
   const ones = new Array<number>(N).fill(1);
-  const wGmv = matVec(Sinv, ones).map((v) => v / (A || 1));
+  const wGmv = matVec(Sinv, ones).map((v) => v / A);
   const gmv: FrontierPoint = {
     weights: wGmv,
     ret: dot(wGmv, mu),
     risk: Math.sqrt(Math.max(quadForm(cov, wGmv), 0)),
   };
 
-  const rMin = B / A - 0.6 * Math.max(Math.abs(B / A), 0.2);
-  const rMax = Math.max(...mu, B / A) * 1.15;
+  const rGmv = B / A;
+  const rSpan = Math.max(Math.abs(rGmv), Math.max(...mu.map(Math.abs)), 0.2);
+  const rMin = rGmv - 0.6 * rSpan;
+  const rMax = rGmv + 0.6 * rSpan;
   const frontier: FrontierPoint[] = [];
   for (let i = 0; i < points; i++) {
     const target = rMin + ((rMax - rMin) * i) / (points - 1);
@@ -131,7 +157,16 @@ export function analyzePortfolio(
 
   const longOnly = maxSharpeLongOnly(cov, mu, riskFree);
 
-  return { cov, corr, mu, frontier, gmv, tangency, maxSharpe, longOnly, riskFree };
+  const result = { cov, corr, mu, frontier, gmv, tangency, maxSharpe, longOnly, riskFree };
+  const flat = [
+    ...cov.flat(), ...corr.flat(), ...mu,
+    ...frontier.flatMap((p) => [p.ret, p.risk, ...p.weights]),
+    ...gmv.weights, gmv.ret, gmv.risk,
+    ...(tangency ? [...tangency.weights, tangency.ret, tangency.risk] : []),
+    ...longOnly.weights, longOnly.ret, longOnly.risk, longOnly.sharpe, maxSharpe,
+  ];
+  if (flat.some((v) => !Number.isFinite(v))) throw new Error("Portfolio menghasilkan NaN/Infinity.");
+  return result;
 }
 
 /** Proyeksi Euclidean ke simpleks {w ≥ 0, Σw = 1} (algoritma Duchi et al.). */
@@ -165,77 +200,101 @@ export function maxSharpeLongOnly(
   iters = 800,
 ): FrontierPoint & { sharpe: number } {
   const n = mu.length;
-  const excess = mu.map((m) => m - riskFree);
-  let w = new Array<number>(n).fill(1 / n);
-  let step = 0.05;
-  const sharpeOf = (x: number[]) => {
-    const sd = Math.sqrt(Math.max(quadForm(cov, x), 1e-18));
-    return dot(x, excess) / sd;
-  };
-  let best = sharpeOf(w);
+  if (n === 0 || cov.length !== n || cov.some((r) => r.length !== n)) {
+    throw new Error("Dimensi covariance/return portfolio tidak cocok.");
+  }
+  if (![riskFree, ...mu, ...cov.flat()].every(Number.isFinite)) {
+    throw new Error("Portfolio long-only menerima nilai non-finite.");
+  }
 
-  for (let k = 0; k < iters; k++) {
-    const Sw = matVec(cov, w);
-    const sd = Math.sqrt(Math.max(quadForm(cov, w), 1e-18));
-    const ex = dot(w, excess);
-    const grad = excess.map((e, i) => e / sd - (ex * Sw[i]!) / (sd * sd * sd));
-    const cand = projectSimplex(w.map((v, i) => v + step * grad[i]!));
-    const val = sharpeOf(cand);
-    if (val > best) {
-      best = val;
-      w = cand;
-    } else {
-      step *= 0.75;
-      if (step < 1e-8) break;
+  const excess = mu.map((m) => m - riskFree);
+  const sharpeOf = (x: number[]) => {
+    const sd2 = quadForm(cov, x);
+    if (!(sd2 > 0) || !Number.isFinite(sd2)) return -Infinity;
+    return dot(x, excess) / Math.sqrt(sd2);
+  };
+
+  // Untuk jumlah aset kecil, enumerasi semua support memberi solusi global:
+  // pada setiap face simpleks, optimum Sharpe interior memenuhi
+  // w ∝ Σ⁻¹(μ-r_f 1). Memeriksa semua face menangani optimum di boundary
+  // tanpa bergantung pada titik awal gradient ascent.
+  const exactLimit = 12;
+  let bestW = new Array<number>(n).fill(1 / n);
+  let best = sharpeOf(bestW);
+
+  if (n <= exactLimit) {
+    const totalMasks = 1 << n;
+    for (let mask = 1; mask < totalMasks; mask++) {
+      const idx: number[] = [];
+      for (let i = 0; i < n; i++) if (mask & (1 << i)) idx.push(i);
+
+      const sub = idx.map((i) => idx.map((j) => cov[i]![j]!));
+      const subExcess = idx.map((i) => excess[i]!);
+      const Sinv = inverse(sub);
+      if (!Sinv) continue;
+      const raw = matVec(Sinv, subExcess);
+      const denom = raw.reduce((a, b) => a + b, 0);
+      if (!(denom > 1e-14) || !Number.isFinite(denom)) continue;
+
+      const wSub = raw.map((v) => v / denom);
+      if (wSub.some((v) => v < -1e-9 || !Number.isFinite(v))) continue;
+      const w = new Array<number>(n).fill(0);
+      idx.forEach((asset, k) => { w[asset] = Math.max(wSub[k]!, 0); });
+      const sum = w.reduce((a, b) => a + b, 0);
+      if (!(sum > 0)) continue;
+      for (let i = 0; i < n; i++) w[i] = w[i]! / sum;
+      const val = sharpeOf(w);
+      if (val > best) {
+        best = val;
+        bestW = w;
+      }
+    }
+  } else {
+    // Fallback untuk jumlah aset besar: multi-start projected gradient.
+    // Beberapa deterministic starts mengurangi ketergantungan pada titik awal.
+    const starts: number[][] = [
+      new Array<number>(n).fill(1 / n),
+      projectSimplex(excess.map((e) => Math.max(e, 0))),
+      ...Array.from({ length: Math.min(8, n) }, (_, k) => {
+        const w = new Array<number>(n).fill(0);
+        w[k] = 1;
+        return w;
+      }),
+    ];
+
+    for (const initial of starts) {
+      let w = projectSimplex(initial);
+      let step = 0.05;
+      let localBest = sharpeOf(w);
+      for (let k = 0; k < iters; k++) {
+        const Sw = matVec(cov, w);
+        const sd2 = quadForm(cov, w);
+        if (!(sd2 > 0)) break;
+        const sd = Math.sqrt(sd2);
+        const ex = dot(w, excess);
+        const grad = excess.map((e, i) => e / sd - (ex * Sw[i]!) / (sd2 * sd));
+        const cand = projectSimplex(w.map((v, i) => v + step * grad[i]!));
+        const val = sharpeOf(cand);
+        if (val > localBest + 1e-12) {
+          localBest = val;
+          w = cand;
+        } else {
+          step *= 0.75;
+          if (step < 1e-9) break;
+        }
+      }
+      if (localBest > best) {
+        best = localBest;
+        bestW = w;
+      }
     }
   }
 
   return {
-    weights: w,
-    ret: dot(w, mu),
-    risk: Math.sqrt(Math.max(quadForm(cov, w), 0)),
+    weights: bestW,
+    ret: dot(bestW, mu),
+    risk: Math.sqrt(Math.max(quadForm(cov, bestW), 0)),
     sharpe: best,
   };
 }
 
-
-export interface PcaResult {
-  /** varians tiap principal component (eigenvalue) */
-  eigenvalues: number[];
-  /** proporsi varians dijelaskan */
-  explained: number[];
-  /** loading: kolom j = eigenvector ke-j */
-  loadings: Matrix;
-  /** skor observasi pada 3 PC pertama */
-  scores3d: { x: number; y: number; z: number }[];
-}
-
-/**
- * PCA atas matriks korelasi (return distandarisasi) — Σv = λv.
- */
-export function pca(R: Matrix): PcaResult {
-  const T = R.length;
-  const N = T > 0 ? R[0]!.length : 0;
-  const cov = covarianceMatrix(R);
-  const corr = correlationFromCov(cov);
-  const { values, vectors } = jacobiEigen(corr);
-  const total = values.reduce((a, b) => a + Math.max(b, 0), 0) || 1;
-
-  const mu = new Array<number>(N).fill(0);
-  for (let t = 0; t < T; t++) for (let j = 0; j < N; j++) mu[j]! += R[t]![j]! / (T || 1);
-  const sd = Array.from({ length: N }, (_, j) => Math.sqrt(Math.max(cov[j]![j]!, 1e-18)));
-
-  const scores3d = R.map((row) => {
-    const z = row.map((v, j) => (v - mu[j]!) / sd[j]!);
-    const proj = (k: number) =>
-      k < N ? z.reduce((s, v, i) => s + v * vectors[i]![k]!, 0) : 0;
-    return { x: proj(0), y: proj(1), z: proj(2) };
-  });
-
-  return {
-    eigenvalues: values,
-    explained: values.map((v) => Math.max(v, 0) / total),
-    loadings: vectors,
-    scores3d,
-  };
-}
