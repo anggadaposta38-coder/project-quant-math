@@ -15,7 +15,7 @@ function cssVar(el: HTMLElement, name: string, fallback: string) {
 export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const camRef = useRef<Camera>({ yaw: -0.75, pitch: 0.42, zoom: 0.8 });
+  const camRef = useRef<Camera>({ yaw: -0.75, pitch: 0.42, zoom: 1.02 });
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const [spin, setSpin] = useState(autoRotate);
   const sceneRef = useRef(scene);

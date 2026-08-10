@@ -402,12 +402,12 @@ function Dashboard() {
               <div className="grid gap-5 lg:grid-cols-2">
                 <Panel
                   title="Alokasi Portofolio (Markowitz)"
-                  subtitle={`Tangency portfolio, r_f = ${(portfolio.riskFree * 100).toFixed(1)}% · Sharpe maks ${portfolio.maxSharpe.toFixed(2)}`}
-                  formula="w_tan ∝ Σ⁻¹(μ − r_f·1)"
+                  subtitle={`Long-only (w ≥ 0, Σw = 1), r_f = ${(portfolio.riskFree * 100).toFixed(1)}% · Sharpe ${portfolio.longOnly.sharpe.toFixed(2)}${portfolio.tangency ? ` · tangency unconstrained Sharpe ${portfolio.maxSharpe.toFixed(2)}` : " · tangency unconstrained tidak eksis (semua excess return ≤ 0)"}`}
+                  formula="max wᵀ(μ − r_f)/√(wᵀΣw) s.t. w ≥ 0, 1ᵀw = 1"
                 >
                   <ul className="space-y-1.5">
                     {portfolio.labels.map((label, i) => {
-                      const w = portfolio.tangency?.weights[i] ?? 0;
+                      const w = portfolio.longOnly.weights[i] ?? 0;
                       return (
                         <li key={label} className="flex items-center gap-3">
                           <span className="tabular w-12 text-xs">{label}</span>
@@ -429,8 +429,11 @@ function Dashboard() {
                     })}
                   </ul>
                   <p className="mt-3 text-[11px] text-muted-foreground">
-                    Bobot negatif = posisi short. GMV: return{" "}
-                    {fmtPct(portfolio.gmv.ret, 0)} · risk {fmtPct(portfolio.gmv.risk, 0)}.
+                    Portofolio varians minimum global (GMV): return{" "}
+                    {fmtPct(portfolio.gmv.ret, 0)} · risk{" "}
+                    {(portfolio.gmv.risk * 100).toFixed(1)}% · expected return long-only{" "}
+                    {fmtPct(portfolio.longOnly.ret, 0)} pada risk{" "}
+                    {(portfolio.longOnly.risk * 100).toFixed(1)}%.
                   </p>
                 </Panel>
 
