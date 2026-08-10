@@ -58,6 +58,18 @@ export function quantile(sorted: number[], p: number): number {
   return sorted[lo]! + (h - lo) * (sorted[hi]! - sorted[lo]!);
 }
 
+/**
+ * Bobot credibility shrinkage James-Stein-lite untuk estimasi mean pada sampel
+ * pendek: w = years / (years + tau). tau = "tahun ekuivalen" yang dibutuhkan
+ * untuk mendekati bobot penuh (default 2 tahun). Dipakai untuk meredam drift
+ * (μ) tahunan yang meledak saat data historis hanya berupa beberapa bulan lalu
+ * dianualisasi — bukan mengubah σ (yang jauh lebih stabil diestimasi).
+ */
+export function shrinkageWeight(years: number, tau = 2): number {
+  if (!Number.isFinite(years) || years <= 0) return 0;
+  return years / (years + tau);
+}
+
 /** Log-return: r_t = ln(P_t / P_{t-1}) */
 export function logReturns(prices: number[]): number[] {
   const out: number[] = [];
