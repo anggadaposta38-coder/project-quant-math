@@ -239,19 +239,25 @@ export function fitOu(x: number[], dt: number): OuParams {
 }
 
 /**
- * Optimal stopping (entry) sederhana untuk proses mean-reverting:
- * ambang entry pada z* yang memaksimalkan E[keuntungan diskonto]
- *   V(z) = (μ − X)·e^{−r·τ(z)},  τ(z) = waktu ekspektasi kembali ke mean.
- * Dihitung numerik pada grid z.
+ * Ambang entry optimal untuk proses mean-reverting (pendekatan optimal stopping
+ * diskrit atas grid z). Untuk entry di z < 0 dan exit di z_exit = −0.25:
+ *   - keuntungan log ≈ (|z| − |z_exit|)·σ_z
+ *   - waktu tempuh ekspektasi (jalur rerata OU: E[X_t|X_0] = μ + (X_0−μ)e^{−θt}):
+ *     τ(z) = ln(|z| / |z_exit|) / θ
+ *   - peluang kesempatan itu muncul (densitas stasioner): Φ(z)
+ * Objektif: V(z) = Φ(z) · (|z| − |z_exit|)·σ_z · e^{−r·τ(z)} → dimaksimalkan.
  */
 export function optimalEntryThreshold(ou: OuParams, sigmaZ: number, r = 0.05): number {
   if (!Number.isFinite(ou.theta) || ou.theta <= 0) return -2;
+  const zExit = 0.25;
   let best = -2;
   let bestVal = -Infinity;
-  for (let z = -3.5; z <= -0.1; z += 0.05) {
-    const dist = -z * sigmaZ; // jarak ke mean dalam satuan harga log
-    const tau = Math.log(Math.max(Math.abs(z), 1.0001)) / ou.theta; // waktu ekspektasi (tahun)
-    const val = dist * Math.exp(-r * tau);
+  for (let z = -3.5; z <= -0.3; z += 0.01) {
+    const az = Math.abs(z);
+    const gain = (az - zExit) * sigmaZ;
+    if (gain <= 0) continue;
+    const tau = Math.log(az / zExit) / ou.theta;
+    const val = normCdf(z) * gain * Math.exp(-r * tau);
     if (val > bestVal) {
       bestVal = val;
       best = z;
@@ -259,3 +265,4 @@ export function optimalEntryThreshold(ou: OuParams, sigmaZ: number, r = 0.05): n
   }
   return best;
 }
+
