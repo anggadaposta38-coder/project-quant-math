@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { blackScholes, fitGbm, fitOu, monteCarloGbm, volatilitySurface } from "./src/lib/quant/stochastic";
+import { blackScholes, fitGbm, fitOu, monteCarloGbm, volatilitySurface, computeEntryZone, optimalEntryThreshold } from "./src/lib/quant/stochastic";
 import { fitHmm } from "./src/lib/quant/hmm";
 import { analyzePortfolio, efficientWeights, pca } from "./src/lib/quant/portfolio";
 import { covarianceMatrix, dot, inverse, jacobiEigen, mulberry32, quadForm, randNorm, ridge, normCdf, kurtosis, skewness } from "./src/lib/quant/stats";
@@ -136,4 +136,29 @@ test("portfolio annualization", () => {
   const a=analyzePortfolio(R,365);
   expect(Math.sqrt(a.cov[0]![0]!)).toBeCloseTo(0.01*Math.sqrt(365),1);
   expect(a.frontier.every(f=>Math.abs(f.weights.reduce((x,y)=>x+y,0)-1)<1e-8)).toBe(true);
+});
+
+test("entry zone: LONG below ref, SHORT is mirror above ref", () => {
+  const ou = { theta: 6, mu: 0, sigma: 0.4, halfLifeBars: 10, b: 0.9 };
+  const sigmaZ = 0.05;
+  const refLog = Math.log(100);
+  const zEntry = optimalEntryThreshold(ou, sigmaZ, 0.04);
+  expect(zEntry).toBeLessThan(0);
+
+  const long = computeEntryZone("LONG", refLog, sigmaZ, zEntry)!;
+  const short = computeEntryZone("SHORT", refLog, sigmaZ, zEntry)!;
+
+  // LONG: entry di bawah ref, stop di bawah entry, target di antara keduanya.
+  expect(long.entry).toBeLessThan(Math.exp(refLog));
+  expect(long.stop).toBeLessThan(long.entry);
+  expect(long.target).toBeGreaterThan(long.entry);
+  expect(long.riskReward).toBeGreaterThan(0);
+
+  // SHORT: cerminan LONG terhadap ref (simetri OU).
+  expect(short.entry).toBeGreaterThan(Math.exp(refLog));
+  expect(short.stop).toBeGreaterThan(short.entry);
+  expect(short.target).toBeLessThan(short.entry);
+
+  // Simetri log-price: jarak log(entry) ke refLog sama besar untuk LONG & SHORT.
+  expect(Math.log(short.entry) - refLog).toBeCloseTo(-(Math.log(long.entry) - refLog), 10);
 });
