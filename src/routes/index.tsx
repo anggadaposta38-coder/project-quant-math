@@ -2,8 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 
 import { getMarketData } from "@/lib/market.functions";
+import { useTheme } from "@/lib/theme";
 import type { Interval } from "@/lib/market.server";
 import { BARS_PER_YEAR } from "@/lib/market.server";
 import {
@@ -63,6 +65,7 @@ function Dashboard() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [view, setView] = useState<ViewId>("mc");
   const palette = usePalette();
+  const { theme, toggleTheme } = useTheme();
   const fetchMarket = useServerFn(getMarketData);
 
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
@@ -178,6 +181,15 @@ function Dashboard() {
             className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
             {isFetching ? "memuat…" : "refresh"}
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? "Ganti ke mode terang" : "Ganti ke mode gelap"}
+            title={theme === "dark" ? "Mode terang" : "Mode gelap"}
+            className="grid size-[30px] place-items-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           </button>
         </div>
       </header>
