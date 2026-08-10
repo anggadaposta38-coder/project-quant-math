@@ -363,6 +363,64 @@ function Dashboard() {
               </div>
             </Panel>
 
+            {/* Zona Entry */}
+            {(() => {
+              const zone =
+                active.action === "LONG"
+                  ? active.longZone
+                  : active.action === "SHORT"
+                    ? active.shortZone
+                    : null;
+              const triggered =
+                zone &&
+                (zone.direction === "LONG"
+                  ? active.price <= zone.entry
+                  : active.price >= zone.entry);
+              return (
+                <Panel
+                  title="Zona Entry (mean-reversion)"
+                  subtitle={
+                    zone
+                      ? `Arah ${zone.direction} · R:R ${zone.riskReward.toFixed(2)}x · ${triggered ? "harga sudah di zona" : "menunggu harga mencapai zona"}`
+                      : "Belum ada sinyal LONG/SHORT aktif, atau harga tidak bersifat mean-reverting (θ ≤ 0) saat ini."
+                  }
+                  formula="P(z) = exp(μ_roll + z·σ_z) — z dari optimal stopping OU"
+                >
+                  {zone ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      <Stat
+                        label="Entry"
+                        value={`$${fmtPrice(zone.entry)}`}
+                        tone={zone.direction === "LONG" ? "bull" : "bear"}
+                        hint={triggered ? "aktif" : "pending"}
+                      />
+                      <Stat
+                        label="Stop-loss"
+                        value={`$${fmtPrice(zone.stop)}`}
+                        tone="bear"
+                        hint={`${(Math.abs(zone.entry - zone.stop) / zone.entry * 100).toFixed(1)}% dari entry`}
+                      />
+                      <Stat
+                        label="Target"
+                        value={`$${fmtPrice(zone.target)}`}
+                        tone="bull"
+                        hint={`${(Math.abs(zone.target - zone.entry) / zone.entry * 100).toFixed(1)}% dari entry`}
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid h-16 place-items-center text-sm text-muted-foreground">
+                      Tidak ada zona entry untuk ditampilkan saat ini.
+                    </div>
+                  )}
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    Snapshot berbasis rata-rata & deviasi log-price bergulir saat ini — bukan
+                    proyeksi harga masa depan, dan akan bergeser saat data di-refresh. Bukan
+                    nasihat keuangan.
+                  </p>
+                </Panel>
+              );
+            })()}
+
             {/* Visual 3D */}
             <Panel
               title={VIEWS.find((v) => v.id === view)!.label}
