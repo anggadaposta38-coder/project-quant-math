@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { renderScene, type Camera, type Scene3D } from "@/lib/viz/engine3d";
+import { THEME_CHANGE_EVENT } from "@/lib/theme";
 
 interface Plot3DProps {
   scene: Scene3D;
@@ -33,10 +34,22 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
     let raf = 0;
     let last = performance.now();
 
-    const theme = {
-      grid: cssVar(wrap, "--chart-grid", "#2a3346"),
-      text: cssVar(wrap, "--chart-axis", "#8b98b0"),
+    const themeRef = {
+      current: {
+        grid: cssVar(wrap, "--chart-grid", "#2a3346"),
+        text: cssVar(wrap, "--chart-axis", "#8b98b0"),
+      },
     };
+    // Re-baca warna tema saat toggle light/dark — tanpa ini kanvas akan
+    // "nyangkut" memakai grid/label color tema lama (warna gelap di atas
+    // background terang jadi nyaris tak terlihat, atau sebaliknya).
+    const refreshTheme = () => {
+      themeRef.current = {
+        grid: cssVar(wrap, "--chart-grid", "#2a3346"),
+        text: cssVar(wrap, "--chart-axis", "#8b98b0"),
+      };
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, refreshTheme);
 
     const draw = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
@@ -53,11 +66,14 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
         canvas.style.height = `${h}px`;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      renderScene(ctx, sceneRef.current, camRef.current, w, h, theme);
+      renderScene(ctx, sceneRef.current, camRef.current, w, h, themeRef.current);
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener(THEME_CHANGE_EVENT, refreshTheme);
+    };
   }, [height]);
 
   const onPointerDown = (e: React.PointerEvent) => {
