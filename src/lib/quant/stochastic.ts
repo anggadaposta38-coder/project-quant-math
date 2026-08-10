@@ -255,9 +255,27 @@ export function fitOu(x: number[], dt: number): OuParams {
  * Objektif: V(z) = Φ(z) · (|z| − |z_exit|)·σ_z · e^{−r·τ(z)} → dimaksimalkan.
  */
 export const OU_Z_EXIT = 0.25;
-/** Buffer stop-loss (dalam σ_z) di luar entry: seberapa jauh lagi harga boleh
- * bergerak melawan posisi sebelum tesis mean-reversion dianggap gagal. */
-export const OU_STOP_BUFFER_Z = 1.0;
+/**
+ * Target rasio reward:risk minimum untuk zona stop-loss.
+ *
+ * Sebelumnya stop buffer memakai konstanta tetap (OU_STOP_BUFFER_Z = 1.0σ_z)
+ * yang sama sekali independen dari hasil optimalEntryThreshold. Untuk rentang
+ * θ yang realistis, optimalEntryThreshold konvergen ke |z| ≈ 0.93 (karena
+ * untuk θ tidak terlalu kecil, faktor diskon e^{-r·τ(z)} ≈ 1 dan objektif
+ * V(z) ≈ Φ(z)·(|z|−z_exit) sudah tidak lagi bergantung θ) — sehingga reward
+ * tipikal hanya ≈ |z| − z_exit ≈ 0.68σ_z. Dengan risk tetap 1.0σ_z, R:R ≈ 0.68
+ * dan breakeven win rate ≈ risk/(risk+reward) ≈ 59.5% — jauh di atas win rate
+ * empiris strategi OU-zone (~41% pada backtest). Ini penyebab struktural
+ * profit factor rendah meski sebagian besar trade "benar arah".
+ *
+ * Perbaikan: turunkan stop buffer dari jarak reward itu sendiri
+ * (rewardZ / OU_TARGET_RR), bukan konstanta lepas — supaya R:R konsisten
+ * berapa pun nilai entryThreshold yang dihasilkan (mis. bila r/z_exit di-tune
+ * di masa depan).
+ */
+export const OU_TARGET_RR = 1.5;
+/** Batas bawah buffer stop (dalam σ_z) agar tidak terlalu sempit saat reward kecil. */
+export const OU_STOP_BUFFER_MIN_Z = 0.35;
 
 export function optimalEntryThreshold(ou: OuParams, sigmaZ: number, r = 0.05): number {
   if (!Number.isFinite(ou.theta) || ou.theta <= 0) return -2;
@@ -296,8 +314,10 @@ export interface EntryZone {
  * (rujukan yang sama dipakai rollingZScore untuk menghitung z saat ini).
  *
  * SHORT adalah cerminan LONG (proses OU simetris terhadap μ): entry di
- * +|entryThreshold|, exit di +z_exit. Stop diletakkan OU_STOP_BUFFER_Z lebih
- * jauh dari entry, ke arah yang melawan posisi.
+ * +|entryThreshold|, exit di +z_exit. Stop diletakkan lebih jauh dari entry,
+ * ke arah yang melawan posisi, dengan jarak = rewardZ / OU_TARGET_RR (bukan
+ * konstanta tetap) supaya R:R konsisten ≥ OU_TARGET_RR (lihat komentar di atas
+ * OU_TARGET_RR untuk alasan perubahan ini).
  *
  * Asumsi: refLog & σ_z dianggap tetap dari sekarang sampai harga menyentuh
  * zona — estimasi snapshot, bukan proyeksi harga masa depan.
@@ -314,7 +334,9 @@ export function computeEntryZone(
   const sign = direction === "LONG" ? 1 : -1;
   const zEntry = sign * entryThresholdNeg; // LONG: negatif (oversold), SHORT: positif (overbought)
   const zTarget = -sign * OU_Z_EXIT; // LONG: -0.25, SHORT: +0.25
-  const zStop = zEntry - sign * OU_STOP_BUFFER_Z; // lebih jauh ke arah melawan posisi
+  const rewardZ = Math.max(Math.abs(entryThresholdNeg) - OU_Z_EXIT, 1e-6);
+  const stopBufferZ = Math.max(OU_STOP_BUFFER_MIN_Z, rewardZ / OU_TARGET_RR);
+  const zStop = zEntry - sign * stopBufferZ; // lebih jauh ke arah melawan posisi
 
   const toPrice = (z: number) => Math.exp(refLog + z * sigmaZ);
   const entry = toPrice(zEntry);
