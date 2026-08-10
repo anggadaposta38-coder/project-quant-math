@@ -1,6 +1,6 @@
 # Project quant math
 
- Saya ingin membuat aplikasi dashboard/monitoring crypto dengan analisa coin menggunakan model matematika yang saya lampirkan,menggunakan api bitget atau binance public bebas baik nya gimana,untuk visual dari modul jika bisa dibuat 3d model lebih bagus,pastikan saat membuat aplikasi tidak salah logika matematika sedikit pun,pikirkan juga aplikasi tidak merespon ke saya karena di blokir isp provider indonesia
+test 123 Saya ingin membuat aplikasi dashboard/monitoring crypto dengan analisa coin menggunakan model matematika yang saya lampirkan,menggunakan api bitget atau binance public bebas baik nya gimana,untuk visual dari modul jika bisa dibuat 3d model lebih bagus,pastikan saat membuat aplikasi tidak salah logika matematika sedikit pun,pikirkan juga aplikasi tidak merespon ke saya karena di blokir isp provider indonesia
 
 This project was built with [Lovable](https://lovable.dev).
 
