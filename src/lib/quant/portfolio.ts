@@ -234,7 +234,15 @@ export function maxSharpeLongOnly(
       if (!Sinv) continue;
       const raw = matVec(Sinv, subExcess);
       const denom = raw.reduce((a, b) => a + b, 0);
-      if (!(denom > 1e-14) || !Number.isFinite(denom)) continue;
+      // w = Σ⁻¹(μ−r_f) / 1ᵀΣ⁻¹(μ−r_f) tetap valid solusi stasioner sepanjang
+      // denom ≠ 0 — TIDAK harus positif. Saat seluruh excess return di subset
+      // negatif (μ terlalu di-shrink relatif r_f), denom hampir selalu negatif,
+      // tapi w = raw/denom (negatif/negatif) bisa tetap all-positive dan feasible.
+      // Mensyaratkan denom > 0 di sini secara keliru men-skip kandidat valid
+      // tersebut, membuat exhaustive search kosong dan diam-diam jatuh balik ke
+      // bestW default (equal-weight) — persis pola bobot 12.5% rata di semua
+      // aset yang terlihat saat mu hasil shrinkage sangat kecil.
+      if (!Number.isFinite(denom) || Math.abs(denom) < 1e-14) continue;
 
       const wSub = raw.map((v) => v / denom);
       if (wSub.some((v) => v < -1e-9 || !Number.isFinite(v))) continue;
