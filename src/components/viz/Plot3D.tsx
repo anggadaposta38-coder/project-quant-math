@@ -1,5 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { renderScene, type Camera, type Scene3D } from "@/lib/viz/engine3d";
+import {
+  renderScene,
+  type Camera,
+  type Scene3D,
+  type Vec3,
+} from "@/lib/viz/engine3d";
 import { THEME_CHANGE_EVENT } from "@/lib/theme";
 
 interface Plot3DProps {
@@ -9,35 +14,141 @@ interface Plot3DProps {
 }
 
 function cssVar(el: HTMLElement, name: string, fallback: string) {
-  const v = getComputedStyle(el).getPropertyValue(name).trim();
-  return v || fallback;
+  const value = getComputedStyle(el).getPropertyValue(name).trim();
+  return value || fallback;
 }
 
-export const Plot3D = memo(function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) {
+const easeInOut = (t: number) =>
+  t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function lerpVec(a: Vec3, b: Vec3, t: number): Vec3 {
+  return [
+    lerp(a[0], b[0], t),
+    lerp(a[1], b[1], t),
+    lerp(a[2], b[2], t),
+  ];
+}
+
+/**
+ * Interpolates scene geometry when quant data changes.
+ *
+ * This is the core rule of the new visual system:
+ * data changes -> geometry moves -> renderer animates that change.
+ *
+ * It does not invent random coordinates.
+ */
+function morphScene(from: Scene3D | null, to: Scene3D, progress: number): Scene3D {
+  if (!from) return to;
+
+  const t = easeInOut(progress);
+
+  const points =
+    from.points && to.points
+      ? to.points.map((point, index) => {
+          const previous = from.points?.[index];
+          return previous
+            ? { ...point, p: lerpVec(previous.p, point.p, t) }
+            : point;
+        })
+      : to.points;
+
+  const lines =
+    from.lines && to.lines
+      ? to.lines.map((line, lineIndex) => {
+          const previous = from.lines?.[lineIndex];
+
+          if (!previous || previous.pts.length !== line.pts.length) {
+            return line;
+          }
+
+          return {
+            ...line,
+            pts: line.pts.map((point, pointIndex) =>
+              lerpVec(previous.pts[pointIndex]!, point, t),
+            ),
+          };
+        })
+      : to.lines;
+
+  const quads =
+    from.quads && to.quads
+      ? to.quads.map((quad, quadIndex) => {
+          const previous = from.quads?.[quadIndex];
+
+          if (!previous) return quad;
+
+          return {
+            ...quad,
+            pts: quad.pts.map((point, pointIndex) =>
+              lerpVec(previous.pts[pointIndex]!, point, t),
+            ) as [Vec3, Vec3, Vec3, Vec3],
+          };
+        })
+      : to.quads;
+
+  return {
+    ...to,
+    points,
+    lines,
+    quads,
+  };
+}
+
+export const Plot3D = memo(function Plot3D({
+  scene,
+  height = 320,
+  autoRotate = true,
+}: Plot3DProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const camRef = useRef<Camera>({ yaw: -0.75, pitch: 0.42, zoom: 1.02 });
+
+  const camRef = useRef<Camera>({
+    yaw: -0.75,
+    pitch: 0.42,
+    zoom: 1.02,
+  });
+
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+
+  const sceneRef = useRef<Scene3D>(scene);
+  const targetSceneRef = useRef<Scene3D>(scene);
+  const transitionRef = useRef<{
+    from: Scene3D;
+    startedAt: number;
+  } | null>(null);
+
   const [spin, setSpin] = useState(autoRotate);
-  const sceneRef = useRef(scene);
-  sceneRef.current = scene;
   const spinRef = useRef(spin);
   spinRef.current = spin;
+
+  // Every new quant result becomes a target state. The renderer interpolates
+  // from the previous geometry instead of teleporting to the new result.
+  useEffect(() => {
+    targetSceneRef.current = scene;
+
+    transitionRef.current = {
+      from: sceneRef.current,
+      startedAt: performance.now(),
+    };
+  }, [scene]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
+
     if (!canvas || !wrap) return;
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     let raf = 0;
     let last = performance.now();
-    let paused = document.hidden;
-    // Jam animasi terus berjalan (breathing/jitter/flow) walau kamera di-pause
-    // lewat tombol rotate/pause — hanya rotasi kamera yang berhenti, bukan
-    // "kehidupan" visualnya.
     let clock = 0;
+    let paused = document.hidden;
 
     const themeRef = {
       current: {
@@ -45,102 +156,173 @@ export const Plot3D = memo(function Plot3D({ scene, height = 320, autoRotate = t
         text: cssVar(wrap, "--chart-axis", "#8b98b0"),
       },
     };
-    // Re-baca warna tema saat toggle light/dark — tanpa ini kanvas akan
-    // "nyangkut" memakai grid/label color tema lama (warna gelap di atas
-    // background terang jadi nyaris tak terlihat, atau sebaliknya).
+
     const refreshTheme = () => {
       themeRef.current = {
         grid: cssVar(wrap, "--chart-grid", "#2a3346"),
         text: cssVar(wrap, "--chart-axis", "#8b98b0"),
       };
     };
-    window.addEventListener(THEME_CHANGE_EVENT, refreshTheme);
+
     const onVisibilityChange = () => {
       paused = document.hidden;
       last = performance.now();
-      if (!paused && raf === 0) raf = requestAnimationFrame(draw);
+
+      if (!paused && raf === 0) {
+        raf = requestAnimationFrame(draw);
+      }
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
 
     const draw = (now: number) => {
       raf = 0;
+
       if (paused) return;
+
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       clock += dt;
-      if (spinRef.current && !dragRef.current) camRef.current.yaw += dt * 0.22;
+
+      if (spinRef.current && !dragRef.current) {
+        camRef.current.yaw += dt * 0.16;
+      }
+
+      const transition = transitionRef.current;
+
+      if (transition) {
+        const progress = Math.min(
+          1,
+          (now - transition.startedAt) / 700,
+        );
+
+        sceneRef.current = morphScene(
+          transition.from,
+          targetSceneRef.current,
+          progress,
+        );
+
+        if (progress >= 1) {
+          sceneRef.current = targetSceneRef.current;
+          transitionRef.current = null;
+        }
+      }
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = wrap.clientWidth;
       const h = height;
-      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+
+      if (
+        canvas.width !== Math.floor(w * dpr) ||
+        canvas.height !== Math.floor(h * dpr)
+      ) {
         canvas.width = Math.floor(w * dpr);
         canvas.height = Math.floor(h * dpr);
         canvas.style.width = `${w}px`;
         canvas.style.height = `${h}px`;
       }
+
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      renderScene(ctx, sceneRef.current, camRef.current, w, h, themeRef.current, clock);
+
+      renderScene(
+        ctx,
+        sceneRef.current,
+        camRef.current,
+        w,
+        h,
+        themeRef.current,
+        clock,
+      );
+
       raf = requestAnimationFrame(draw);
     };
-    if (!paused) raf = requestAnimationFrame(draw);
+
+    window.addEventListener(THEME_CHANGE_EVENT, refreshTheme);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    raf = requestAnimationFrame(draw);
+
     return () => {
       cancelAnimationFrame(raf);
-      raf = 0;
       window.removeEventListener(THEME_CHANGE_EVENT, refreshTheme);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [height]);
 
-  const onPointerDown = (e: React.PointerEvent) => {
-    dragRef.current = { x: e.clientX, y: e.clientY };
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+  const onPointerDown = (event: React.PointerEvent) => {
+    dragRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+
+    (event.target as Element).setPointerCapture?.(event.pointerId);
   };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    camRef.current.yaw += (e.clientX - d.x) * 0.008;
+
+  const onPointerMove = (event: React.PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+
+    camRef.current.yaw += (event.clientX - drag.x) * 0.008;
     camRef.current.pitch = Math.max(
       -1.4,
-      Math.min(1.4, camRef.current.pitch + (e.clientY - d.y) * 0.006),
+      Math.min(
+        1.4,
+        camRef.current.pitch + (event.clientY - drag.y) * 0.006,
+      ),
     );
-    dragRef.current = { x: e.clientX, y: e.clientY };
+
+    dragRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
   };
+
   const endDrag = () => {
     dragRef.current = null;
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    const step = e.shiftKey ? 0.18 : 0.08;
-    switch (e.key) {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const step = event.shiftKey ? 0.18 : 0.08;
+
+    switch (event.key) {
       case "ArrowLeft":
-        e.preventDefault();
+        event.preventDefault();
         camRef.current.yaw -= step;
         break;
       case "ArrowRight":
-        e.preventDefault();
+        event.preventDefault();
         camRef.current.yaw += step;
         break;
       case "ArrowUp":
-        e.preventDefault();
-        camRef.current.pitch = Math.min(1.4, camRef.current.pitch + step);
+        event.preventDefault();
+        camRef.current.pitch = Math.min(
+          1.4,
+          camRef.current.pitch + step,
+        );
         break;
       case "ArrowDown":
-        e.preventDefault();
-        camRef.current.pitch = Math.max(-1.4, camRef.current.pitch - step);
+        event.preventDefault();
+        camRef.current.pitch = Math.max(
+          -1.4,
+          camRef.current.pitch - step,
+        );
         break;
       case "+":
       case "=":
-        e.preventDefault();
-        camRef.current.zoom = Math.min(2.2, camRef.current.zoom * 1.06);
+        event.preventDefault();
+        camRef.current.zoom = Math.min(
+          2.2,
+          camRef.current.zoom * 1.06,
+        );
         break;
       case "-":
       case "_":
-        e.preventDefault();
-        camRef.current.zoom = Math.max(0.35, camRef.current.zoom * 0.94);
+        event.preventDefault();
+        camRef.current.zoom = Math.max(
+          0.35,
+          camRef.current.zoom * 0.94,
+        );
         break;
       case " ":
-        e.preventDefault();
+        event.preventDefault();
         setSpin((value) => !value);
         break;
     }
@@ -160,18 +342,27 @@ export const Plot3D = memo(function Plot3D({ scene, height = 320, autoRotate = t
         onPointerUp={endDrag}
         onPointerLeave={endDrag}
         onKeyDown={onKeyDown}
-        onWheel={(e) => {
+        onWheel={(event) => {
           camRef.current.zoom = Math.max(
             0.35,
-            Math.min(2.2, camRef.current.zoom * (e.deltaY > 0 ? 0.94 : 1.06)),
+            Math.min(
+              2.2,
+              camRef.current.zoom *
+                (event.deltaY > 0 ? 0.94 : 1.06),
+            ),
           );
         }}
       />
+
       <button
         type="button"
-        aria-label={spin ? "Jeda rotasi visualisasi 3D" : "Mulai rotasi visualisasi 3D"}
+        aria-label={
+          spin
+            ? "Jeda rotasi visualisasi 3D"
+            : "Mulai rotasi visualisasi 3D"
+        }
         aria-pressed={spin}
-        onClick={() => setSpin((s) => !s)}
+        onClick={() => setSpin((value) => !value)}
         className="absolute right-2 top-2 rounded border border-border/60 bg-card/70 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
       >
         {spin ? "pause" : "rotate"}
