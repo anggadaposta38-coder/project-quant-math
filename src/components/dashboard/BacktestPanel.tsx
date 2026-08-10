@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Candle, Interval } from "@/lib/market.server";
 import {
   DEFAULT_BACKTEST_CONFIG,
@@ -22,6 +22,7 @@ function MetricsGrid({ label, m }: { label: string; m: BacktestComparison["compo
         />
         <Stat label="CAGR" value={fmtPct(m.cagr, 1)} tone={m.cagr >= 0 ? "bull" : "bear"} />
         <Stat label="Sharpe" value={m.sharpe.toFixed(2)} />
+        <Stat label="Sortino" value={Number.isFinite(m.sortino) ? m.sortino.toFixed(2) : "∞"} />
         <Stat
           label="Max drawdown"
           value={fmtPct(m.maxDrawdown, 1)}
@@ -52,13 +53,23 @@ export function BacktestPanel({
   const [result, setResult] = useState<BacktestComparison | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const runTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (runTimerRef.current !== null) {
+        clearTimeout(runTimerRef.current);
+        runTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const run = () => {
     setRunning(true);
     setError(null);
     // setTimeout(0) agar state "running" sempat ter-render sebelum komputasi
     // sinkron (walk-forward refit HMM berulang) memblokir main thread sejenak.
-    setTimeout(() => {
+    runTimerRef.current = setTimeout(() => {
       try {
         const r = runWalkForwardBacktest(candles, interval, DEFAULT_BACKTEST_CONFIG);
         setResult(r);
@@ -67,16 +78,24 @@ export function BacktestPanel({
         setResult(null);
       } finally {
         setRunning(false);
+        runTimerRef.current = null;
       }
     }, 30);
   };
 
   const cfg = DEFAULT_BACKTEST_CONFIG;
+  const equitySeries = useMemo(
+    () => [
+      { name: "Skor komposit", colorClass: "stroke-primary", points: result?.composite.equityCurve ?? [] },
+      { name: "OU zone", colorClass: "stroke-accent", points: result?.ouZone.equityCurve ?? [] },
+    ],
+    [result],
+  );
 
   return (
     <Panel
       title={`Backtest Walk-Forward — ${symbol.replace("USDT", "")}/USDT`}
-      subtitle={`Refit model tiap ${cfg.refitInterval} bar setelah warmup ${cfg.warmupBars} bar · biaya ${cfg.feeBps + cfg.slippageBps} bps/round-trip · tanpa lookahead (sinyal di checkpoint t hanya memakai bar ≤ t)`}
+      subtitle={`Refit model tiap ${cfg.refitInterval} bar setelah warmup ${cfg.warmupBars} bar · biaya ${(cfg.feeBps + cfg.slippageBps) * 2} bps round-trip · tanpa lookahead (sinyal di checkpoint t hanya memakai bar ≤ t)`}
       right={
         <button
           type="button"
@@ -103,12 +122,7 @@ export function BacktestPanel({
 
           <div>
             <div className="mono-label mb-2">Equity curve (mulai = 1.0)</div>
-            <EquityChart
-              series={[
-                { name: "Skor komposit", colorClass: "stroke-primary", points: result.composite.equityCurve },
-                { name: "OU zone", colorClass: "stroke-accent", points: result.ouZone.equityCurve },
-              ]}
-            />
+            <EquityChart series={equitySeries} />
           </div>
 
           {result.ouZone.trades.length > 0 ? (

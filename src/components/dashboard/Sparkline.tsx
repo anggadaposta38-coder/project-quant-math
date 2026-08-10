@@ -1,4 +1,5 @@
-export function Sparkline({
+import React from "react";
+export const Sparkline = React.memo(function Sparkline({
   values,
   height = 34,
   tone,
@@ -30,9 +31,9 @@ export function Sparkline({
       />
     </svg>
   );
-}
+});
 
-export function ProbBar({ probs, labels }: { probs: number[]; labels: string[] }) {
+export const ProbBar = React.memo(function ProbBar({ probs, labels }: { probs: number[]; labels: string[] }) {
   const tone = ["bg-bear", "bg-flat", "bg-bull"];
   return (
     <div>
@@ -54,4 +55,4 @@ export function ProbBar({ probs, labels }: { probs: number[]; labels: string[] }
       </div>
     </div>
   );
-}
+});

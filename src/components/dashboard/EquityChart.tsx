@@ -1,3 +1,5 @@
+import React from "react";
+
 export interface EquitySeries {
   name: string;
   colorClass: string; // tailwind stroke class, e.g. "stroke-primary"
@@ -5,7 +7,7 @@ export interface EquitySeries {
 }
 
 /** Grafik garis multi-seri sederhana untuk membandingkan equity curve backtest. */
-export function EquityChart({
+export const EquityChart = React.memo(function EquityChart({
   series,
   height = 220,
 }: {
@@ -75,4 +77,4 @@ export function EquityChart({
       </div>
     </div>
   );
-}
+});

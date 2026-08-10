@@ -17,7 +17,7 @@ export function Panel({
 }) {
   return (
     <section className={`panel p-4 ${className}`}>
-      <header className="mb-3 flex items-start justify-between gap-3">
+      <header className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
         <div>
           <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
           {subtitle ? (
