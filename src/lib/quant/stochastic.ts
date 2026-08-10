@@ -140,7 +140,7 @@ export function monteCarloGbm(
   const tailCount = Math.max(1, Math.floor(sortedT.length * 0.05));
   const tailMean = mean(sortedT.slice(0, tailCount));
 
-  if (![...terminal, ...bands.p05, ...bands.p25, ...bands.p50, ...bands.p75, ...bands.p95].some((v) => !Number.isFinite(v))) {
+  if ([...terminal, ...bands.p05, ...bands.p25, ...bands.p50, ...bands.p75, ...bands.p95].some((v) => !Number.isFinite(v))) {
     throw new Error("Monte Carlo menghasilkan NaN/Infinity.");
   }
 
