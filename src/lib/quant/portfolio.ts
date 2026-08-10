@@ -36,6 +36,9 @@ export interface PortfolioAnalysis {
   gmv: FrontierPoint;
   tangency: FrontierPoint | null;
   maxSharpe: number;
+  /** optimum tanpa short (w ≥ 0, Σw = 1) */
+  longOnly: FrontierPoint & { sharpe: number };
+
   riskFree: number;
 }
 
@@ -102,13 +105,15 @@ export function analyzePortfolio(
     });
   }
 
-  // Portofolio tangency: w ∝ Σ⁻¹(μ − r_f·1)
+  // Portofolio tangency: w ∝ Σ⁻¹(μ − r_f·1).
+  // Valid hanya bila 1ᵀΣ⁻¹(μ − r_f·1) > 0; jika ≤ 0 tangency tidak eksis
+  // (tidak ada portofolio dengan excess return positif yang bisa dinormalisasi).
   const excess = mu.map((m) => m - riskFree);
   const raw = matVec(Sinv, excess);
   const s = raw.reduce((a, b) => a + b, 0);
   let tangency: FrontierPoint | null = null;
   let maxSharpe = 0;
-  if (Math.abs(s) > 1e-12) {
+  if (s > 1e-12) {
     const w = raw.map((v) => v / s);
     const ret = dot(w, mu);
     const risk = Math.sqrt(Math.max(quadForm(cov, w), 0));
@@ -116,8 +121,75 @@ export function analyzePortfolio(
     maxSharpe = risk > 0 ? (ret - riskFree) / risk : 0;
   }
 
-  return { cov, corr, mu, frontier, gmv, tangency, maxSharpe, riskFree };
+  const longOnly = maxSharpeLongOnly(cov, mu, riskFree);
+
+  return { cov, corr, mu, frontier, gmv, tangency, maxSharpe, longOnly, riskFree };
 }
+
+/** Proyeksi Euclidean ke simpleks {w ≥ 0, Σw = 1} (algoritma Duchi et al.). */
+export function projectSimplex(v: number[]): number[] {
+  const n = v.length;
+  const u = [...v].sort((a, b) => b - a);
+  let cssv = 0;
+  let rho = 0;
+  let theta = 0;
+  for (let i = 0; i < n; i++) {
+    cssv += u[i]!;
+    const t = (cssv - 1) / (i + 1);
+    if (u[i]! - t > 0) {
+      rho = i + 1;
+      theta = t;
+    }
+  }
+  if (rho === 0) return new Array<number>(n).fill(1 / n);
+  return v.map((x) => Math.max(x - theta, 0));
+}
+
+/**
+ * Max-Sharpe long-only (tanpa short, fully invested) via projected gradient ascent:
+ *   maksimalkan f(w) = wᵀ(μ − r_f) / √(wᵀΣw) pada simpleks.
+ *   ∇f = (μ − r_f)/σ − (wᵀ(μ − r_f))·Σw/σ³
+ */
+export function maxSharpeLongOnly(
+  cov: Matrix,
+  mu: number[],
+  riskFree: number,
+  iters = 800,
+): FrontierPoint & { sharpe: number } {
+  const n = mu.length;
+  const excess = mu.map((m) => m - riskFree);
+  let w = new Array<number>(n).fill(1 / n);
+  let step = 0.05;
+  const sharpeOf = (x: number[]) => {
+    const sd = Math.sqrt(Math.max(quadForm(cov, x), 1e-18));
+    return dot(x, excess) / sd;
+  };
+  let best = sharpeOf(w);
+
+  for (let k = 0; k < iters; k++) {
+    const Sw = matVec(cov, w);
+    const sd = Math.sqrt(Math.max(quadForm(cov, w), 1e-18));
+    const ex = dot(w, excess);
+    const grad = excess.map((e, i) => e / sd - (ex * Sw[i]!) / (sd * sd * sd));
+    const cand = projectSimplex(w.map((v, i) => v + step * grad[i]!));
+    const val = sharpeOf(cand);
+    if (val > best) {
+      best = val;
+      w = cand;
+    } else {
+      step *= 0.75;
+      if (step < 1e-8) break;
+    }
+  }
+
+  return {
+    weights: w,
+    ret: dot(w, mu),
+    risk: Math.sqrt(Math.max(quadForm(cov, w), 0)),
+    sharpe: best,
+  };
+}
+
 
 export interface PcaResult {
   /** varians tiap principal component (eigenvalue) */
