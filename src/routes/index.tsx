@@ -546,7 +546,7 @@ function Dashboard() {
                   subtitle={
                     zone
                       ? `Arah ${zone.direction} · R:R ${zone.riskReward.toFixed(2)}x · ${triggered ? "harga sudah di zona" : "menunggu harga mencapai zona"}`
-                      : "Model OU saat ini tidak mean-reverting yang cukup andal (θ ≤ 0, belum stasioner, atau sampel terlalu pendek/regime baru bergeser) — bukan berarti skor komposit sedang WAIT."
+                      : (active.ouZoneReason ?? "Tidak ada sinyal LONG/SHORT aktif saat ini.")
                   }
                   formula="P(z) = exp(μ_roll + z·σ_z) — z dari optimal stopping OU"
                 >
