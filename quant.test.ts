@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 import { blackScholes, fitGbm, fitOu, monteCarloGbm, volatilitySurface } from "./src/lib/quant/stochastic";
 import { fitHmm } from "./src/lib/quant/hmm";
 import { analyzePortfolio, efficientWeights, pca } from "./src/lib/quant/portfolio";
