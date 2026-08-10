@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useMemo, useState } from "react";
+import { Component, lazy, Suspense, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { Moon, Sun } from "lucide-react";
 
 import { getMarketData } from "@/lib/market.functions";
@@ -18,9 +18,8 @@ import {
 } from "@/lib/quant/analysis";
 import { analyzePortfolio, pca } from "@/lib/quant/portfolio";
 import { Panel, Stat } from "@/components/dashboard/Panel";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { ProbBar, Sparkline } from "@/components/dashboard/Sparkline";
-import { BacktestPanel } from "@/components/dashboard/BacktestPanel";
-import { Plot3D } from "@/components/viz/Plot3D";
 import { usePalette } from "@/lib/viz/palette";
 import {
   frontierScene,
@@ -61,7 +60,57 @@ const VIEWS = [
 ] as const;
 type ViewId = (typeof VIEWS)[number]["id"];
 
+// Heavy, interaction-only surfaces are split from the initial dashboard chunk.
+// The dashboard can render its core metrics before 3D rendering/backtest code is loaded.
+const Plot3D = lazy(() =>
+  import("@/components/viz/Plot3D").then((m) => ({ default: m.Plot3D })),
+);
+const BacktestPanel = lazy(() =>
+  import("@/components/dashboard/BacktestPanel").then((m) => ({ default: m.BacktestPanel })),
+);
+
+class SectionErrorBoundary extends Component<
+  {
+    title: string;
+    children: ReactNode;
+  },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(`[${this.props.title}]`, error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="panel grid min-h-40 place-items-center gap-2 p-6 text-center">
+          <div>
+            <p className="text-sm font-medium text-foreground">{this.props.title} tidak dapat dimuat</p>
+            <p className="mt-1 text-xs text-muted-foreground">Bagian ini gagal dimuat. Bagian dashboard lainnya tetap tersedia.</p>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false })}
+              className="mt-3 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-foreground hover:bg-surface-2"
+            >
+              Coba lagi
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function Dashboard() {
+  const isMobile = useIsMobile();
+  const plotHeight = isMobile ? 300 : 380;
   const [interval, setIntervalValue] = useState<Interval>("4h");
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [view, setView] = useState<ViewId>("mc");
@@ -69,11 +118,21 @@ function Dashboard() {
   const { theme, toggleTheme } = useTheme();
   const fetchMarket = useServerFn(getMarketData);
 
-  const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    isFetching,
+    isPlaceholderData,
+    refetch,
+  } = useQuery({
     queryKey: ["market", interval],
     queryFn: () => fetchMarket({ data: { interval, limit: 500 } }),
     refetchInterval: 60_000,
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    retry: 1,
   });
 
   const analyses = useMemo<SymbolAnalysis[]>(() => {
@@ -87,7 +146,7 @@ function Dashboard() {
 
   const portfolio = useMemo(() => {
     if (!data || data.series.length < 2) return null;
-    const { R, labels } = alignedReturns(data.series);
+    const { R, labels } = alignedReturns(data.series, data.interval);
     if (R.length < 30) return null;
     return {
       ...analyzePortfolio(R, BARS_PER_YEAR[data.interval]),
@@ -151,7 +210,7 @@ function Dashboard() {
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="mono-label">Quant Terminal · Crypto</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight lg:text-3xl">
+          <h1 className="mt-1 text-xl font-semibold tracking-tight sm:text-2xl lg:text-3xl">
             Analisa & Entry Pasar Crypto — Model Matematika
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
@@ -166,7 +225,8 @@ function Dashboard() {
                 key={iv}
                 type="button"
                 onClick={() => setIntervalValue(iv)}
-                className={`tabular px-3 py-1.5 text-xs transition-colors ${
+                aria-pressed={interval === iv}
+                className={`tabular min-h-10 px-3 py-2 text-xs transition-colors sm:min-h-8 sm:py-1.5 ${
                   interval === iv
                     ? "bg-primary text-primary-foreground"
                     : "bg-surface text-muted-foreground hover:text-foreground"
@@ -179,7 +239,7 @@ function Dashboard() {
           <button
             type="button"
             onClick={() => refetch()}
-            className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            className="min-h-10 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground sm:min-h-8 sm:py-1.5"
           >
             {isFetching ? "memuat…" : "refresh"}
           </button>
@@ -188,7 +248,7 @@ function Dashboard() {
             onClick={toggleTheme}
             aria-label={theme === "dark" ? "Ganti ke mode terang" : "Ganti ke mode gelap"}
             title={theme === "dark" ? "Mode terang" : "Mode gelap"}
-            className="grid size-[30px] place-items-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:text-foreground"
+            className="grid size-10 place-items-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:text-foreground sm:size-[30px]"
           >
             {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           </button>
@@ -197,7 +257,7 @@ function Dashboard() {
 
       <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-1.5 rounded-full bg-bull" />
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-bull" />
           Data diambil di sisi server (server function), bukan dari browser — tidak
           terpengaruh blokir ISP Indonesia.
         </span>
@@ -210,11 +270,22 @@ function Dashboard() {
         ) : null}
       </div>
 
-      {isLoading ? (
+      {data && isFetching ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mb-4 flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground"
+        >
+          <span>Memperbarui data pasar… tampilan terakhir tetap digunakan.</span>
+          {isPlaceholderData ? <span className="tabular">data sebelumnya</span> : null}
+        </div>
+      ) : null}
+
+      {isLoading && !data ? (
         <div className="panel grid h-64 place-items-center text-sm text-muted-foreground">
           Mengambil data pasar & mem-fit model…
         </div>
-      ) : isError || !active ? (
+      ) : (isError && !data) || !active ? (
         <div className="panel p-6">
           <h2 className="text-sm font-semibold text-bear">Data pasar tidak tersedia</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
@@ -240,7 +311,8 @@ function Dashboard() {
                     <button
                       type="button"
                       onClick={() => setSymbol(a.symbol)}
-                      className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
+                      aria-pressed={activeRow}
+                      className={`min-h-11 w-full rounded-md border px-3 py-2 text-left transition-colors ${
                         activeRow
                           ? "border-primary/60 bg-surface-2"
                           : "border-transparent hover:bg-surface-2/60"
@@ -400,7 +472,7 @@ function Dashboard() {
                   formula="P(z) = exp(μ_roll + z·σ_z) — z dari optimal stopping OU"
                 >
                   {zone ? (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       <Stat
                         label="Entry"
                         value={`$${fmtPrice(zone.entry)}`}
@@ -440,7 +512,7 @@ function Dashboard() {
               subtitle={viewMeta[view].desc}
               formula={viewMeta[view].formula}
               right={
-                <span className="mono-label hidden sm:block">drag = rotasi · scroll = zoom</span>
+                <span className="mono-label hidden md:block">drag = rotasi · scroll = zoom</span>
               }
             >
               <div className="mb-3 flex flex-wrap gap-1.5">
@@ -449,6 +521,7 @@ function Dashboard() {
                     key={v.id}
                     type="button"
                     onClick={() => setView(v.id)}
+                    aria-pressed={view === v.id}
                     className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
                       view === v.id
                         ? "border-primary/60 bg-surface-2 text-foreground"
@@ -460,9 +533,19 @@ function Dashboard() {
                 ))}
               </div>
               {scene ? (
-                <Plot3D scene={scene} height={380} />
+                <SectionErrorBoundary title="Visualisasi 3D">
+                  <Suspense
+                    fallback={
+                      <div className="grid h-[300px] place-items-center text-xs text-muted-foreground sm:h-[380px]">
+                        Memuat visualisasi 3D…
+                      </div>
+                    }
+                  >
+                    <Plot3D scene={scene} height={plotHeight} />
+                  </Suspense>
+                </SectionErrorBoundary>
               ) : (
-                <div className="grid h-[380px] place-items-center text-sm text-muted-foreground">
+                <div className="grid h-[300px] place-items-center text-sm text-muted-foreground sm:h-[380px]">
                   Butuh minimal 2 aset dengan riwayat cukup untuk visual ini.
                 </div>
               )}
@@ -473,7 +556,7 @@ function Dashboard() {
               <div className="grid gap-5 lg:grid-cols-2">
                 <Panel
                   title="Alokasi Portofolio (Markowitz)"
-                  subtitle={`Long-only (w ≥ 0, Σw = 1), r_f = ${(portfolio.riskFree * 100).toFixed(1)}% · Sharpe ${portfolio.longOnly.sharpe.toFixed(2)}${portfolio.tangency ? ` · tangency unconstrained Sharpe ${portfolio.maxSharpe.toFixed(2)}` : " · tangency unconstrained tidak eksis (semua excess return ≤ 0)"}`}
+                  subtitle={`Long-only (w ≥ 0, Σw = 1), r_f = ${(portfolio.riskFree * 100).toFixed(1)}% · Sharpe ${portfolio.longOnly.sharpe.toFixed(2)}${portfolio.tangency ? ` · tangency unconstrained Sharpe ${portfolio.maxSharpe.toFixed(2)}` : " · tidak ada normalisasi tangency dengan excess positif"}`}
                   formula="max wᵀ(μ − r_f)/√(wᵀΣw) s.t. w ≥ 0, 1ᵀw = 1"
                 >
                   <ul className="space-y-1.5">
@@ -542,7 +625,17 @@ function Dashboard() {
             {(() => {
               const series = data?.series.find((s) => s.symbol === active.symbol);
               return series ? (
-                <BacktestPanel symbol={active.symbol} candles={series.candles} interval={interval} />
+                <SectionErrorBoundary title="Modul backtest">
+                  <Suspense
+                    fallback={
+                      <div className="panel grid h-40 place-items-center text-xs text-muted-foreground">
+                        Memuat modul backtest…
+                      </div>
+                    }
+                  >
+                    <BacktestPanel symbol={active.symbol} candles={series.candles} interval={interval} />
+                  </Suspense>
+                </SectionErrorBoundary>
               ) : null;
             })()}
 
