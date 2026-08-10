@@ -646,8 +646,13 @@ export function summarizeWalkForwardFolds(
     const start = curve[startBar]!;
     const end = curve[endBar]!;
     const segment = curve.slice(startBar, endBar + 1);
+    // Trade statistics count trades CLOSED inside this fold; exposure counts
+    // any trade that overlaps the fold, including positions opened earlier.
     const segmentTrades = result.trades.filter(
       (t) => t.exitTime > start.t && t.exitTime <= end.t,
+    );
+    const overlappingTrades = result.trades.filter(
+      (t) => t.entryTime <= end.t && t.exitTime > start.t,
     );
     let peak = segment[0]!.equity;
     let mdd = 0;
@@ -657,7 +662,7 @@ export function summarizeWalkForwardFolds(
       peak = Math.max(peak, e);
       mdd = Math.min(mdd, e / peak - 1);
       const barTime = segment[i]!.t;
-      if (segmentTrades.some((t) => t.entryTime < barTime && t.exitTime >= barTime)) exposedBars++;
+      if (overlappingTrades.some((t) => t.entryTime <= barTime && t.exitTime >= barTime)) exposedBars++;
     }
     const bars = Math.max(segment.length - 1, 1);
     const totalReturn = start.equity > 0 ? end.equity / start.equity - 1 : 0;
@@ -679,6 +684,14 @@ export function summarizeWalkForwardFolds(
 export interface BacktestComparison {
   composite: BacktestResult;
   ouZone: BacktestResult;
+  /**
+   * Chronological OOS robustness folds over the already walk-forward equity
+   * curve. These are diagnostics, not an independent validation set.
+   */
+  folds: {
+    composite: WalkForwardFoldSummary[];
+    ouZone: WalkForwardFoldSummary[];
+  };
   config: BacktestConfig;
 }
 
@@ -744,10 +757,16 @@ export function runWalkForwardBacktest(
   }
   const checkpoints = buildCheckpoints(candles.length, cfg);
   const checkpointSignals = buildCheckpointSignals(candles, checkpoints, interval, cfg.riskFree);
+  const composite = runCompositeBacktest(candles, interval, cfg, checkpointSignals);
+  const ouZone = runOuZoneBacktest(candles, interval, cfg, checkpointSignals);
 
   return {
-    composite: runCompositeBacktest(candles, interval, cfg, checkpointSignals),
-    ouZone: runOuZoneBacktest(candles, interval, cfg, checkpointSignals),
+    composite,
+    ouZone,
+    folds: {
+      composite: summarizeWalkForwardFolds(composite, 3),
+      ouZone: summarizeWalkForwardFolds(ouZone, 3),
+    },
     config: cfg,
   };
 }
