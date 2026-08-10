@@ -4,6 +4,7 @@ import {
   DEFAULT_BACKTEST_CONFIG,
   runWalkForwardBacktest,
   type BacktestComparison,
+  type WalkForwardFoldSummary,
 } from "@/lib/quant/backtest";
 import { fmtPct } from "@/lib/quant/analysis";
 import { Panel, Stat } from "./Panel";
@@ -36,6 +37,65 @@ function MetricsGrid({ label, m }: { label: string; m: BacktestComparison["compo
         <Stat label="Profit factor" value={Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : "∞"} />
         <Stat label="Avg trade" value={fmtPct(m.avgTradeReturn, 2)} tone={m.avgTradeReturn >= 0 ? "bull" : "bear"} />
         <Stat label="Exposure" value={`${(m.exposurePct * 100).toFixed(0)}%`} hint="% bar dengan posisi terbuka" />
+      </div>
+    </div>
+  );
+}
+
+
+function formatFoldDate(timestamp: number): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(timestamp);
+}
+
+function FoldRobustness({ label, folds }: { label: string; folds: WalkForwardFoldSummary[] }) {
+  const positiveFolds = folds.filter((fold) => fold.totalReturn > 0).length;
+  const firstFold = folds[0];
+  if (firstFold === undefined) return null;
+  const worstFold = folds.reduce((worst, fold) =>
+    fold.totalReturn < worst.totalReturn ? fold : worst, firstFold);
+
+  return (
+    <div>
+      <div className="mono-label mb-2">{label}</div>
+      <div className="mb-2 grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Stat label="Fold positif" value={`${positiveFolds}/${folds.length}`} />
+        <Stat label="Fold terburuk" value={fmtPct(worstFold.totalReturn, 1)} tone={worstFold.totalReturn >= 0 ? "bull" : "bear"} />
+        <Stat label="MDD terburuk" value={fmtPct(Math.min(...folds.map((fold) => fold.maxDrawdown)), 1)} tone="bear" />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-[11px]">
+          <thead className="text-muted-foreground">
+            <tr>
+              <th className="pb-1 pr-3 font-normal">Fold</th>
+              <th className="pb-1 pr-3 font-normal">Periode</th>
+              <th className="pb-1 pr-3 text-right font-normal">Return</th>
+              <th className="pb-1 pr-3 text-right font-normal">MDD</th>
+              <th className="pb-1 pr-3 text-right font-normal">Trades</th>
+              <th className="pb-1 text-right font-normal">Win rate</th>
+            </tr>
+          </thead>
+          <tbody className="tabular">
+            {folds.map((fold) => (
+              <tr key={fold.fold} className="border-t border-border/50">
+                <td className="py-1 pr-3">{fold.fold}</td>
+                <td className="py-1 pr-3 text-muted-foreground">
+                  {formatFoldDate(fold.startTime)} → {formatFoldDate(fold.endTime)}
+                </td>
+                <td className={`py-1 pr-3 text-right ${fold.totalReturn >= 0 ? "text-bull" : "text-bear"}`}>
+                  {fmtPct(fold.totalReturn, 1)}
+                </td>
+                <td className="py-1 pr-3 text-right text-bear">{fmtPct(fold.maxDrawdown, 1)}</td>
+                <td className="py-1 pr-3 text-right">{fold.numTrades}</td>
+                <td className="py-1 text-right">{(fold.winRate * 100).toFixed(0)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -125,6 +185,11 @@ export function BacktestPanel({
             <EquityChart series={equitySeries} />
           </div>
 
+          <div className="space-y-4">
+            <FoldRobustness label="OOS fold robustness · Skor komposit" folds={result.folds.composite} />
+            <FoldRobustness label="OOS fold robustness · OU zone" folds={result.folds.ouZone} />
+          </div>
+
           {result.ouZone.trades.length > 0 ? (
             <div>
               <div className="mono-label mb-2">
@@ -162,10 +227,11 @@ export function BacktestPanel({
           ) : null}
 
           <p className="text-[11px] text-muted-foreground">
-            Backtest historis tidak menjamin performa masa depan. Bobot skor komposit &
-            parameter OU dipakai apa adanya dari kode live (tidak dioptimasi ulang khusus
-            untuk periode ini), untuk mencerminkan performa sinyal yang benar-benar
-            dipakai di dashboard.
+            Backtest historis tidak menjamin performa masa depan. Fold OOS di atas membagi
+            equity curve walk-forward secara kronologis untuk melihat apakah hasil bergantung
+            pada satu sub-periode. Fold ini bukan validation set independen dan bukan bukti
+            adanya edge di masa depan. Bobot skor komposit & parameter OU dipakai apa adanya
+            dari kode live (tidak dioptimasi ulang khusus untuk periode ini).
           </p>
         </div>
       )}
