@@ -125,7 +125,7 @@ function Dashboard() {
       desc: "600 jalur GBM eksak; pita P05/P50/P95 membentuk kerucut probabilitas.",
     },
     vol: {
-      formula: "σ(x,T) = σ_ATM(T)·[1 − (s/6)z + (k/24)(z² − 1)], x = ln(K/S)",
+      formula: "σ(x,T) = σ_ATM(T)·[1 + (s/6)z + (k/24)(z² − 1)], x = ln(K/S)",
       desc: "Skew/smile diturunkan dari skewness & excess kurtosis realized (ekspansi Corrado-Su).",
     },
     hmm: {
