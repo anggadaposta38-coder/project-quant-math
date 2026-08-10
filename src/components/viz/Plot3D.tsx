@@ -33,6 +33,10 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
 
     let raf = 0;
     let last = performance.now();
+    // Jam animasi terus berjalan (breathing/jitter/flow) walau kamera di-pause
+    // lewat tombol rotate/pause — hanya rotasi kamera yang berhenti, bukan
+    // "kehidupan" visualnya.
+    let clock = 0;
 
     const themeRef = {
       current: {
@@ -54,6 +58,7 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
     const draw = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
+      clock += dt;
       if (spinRef.current && !dragRef.current) camRef.current.yaw += dt * 0.22;
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -66,7 +71,7 @@ export function Plot3D({ scene, height = 320, autoRotate = true }: Plot3DProps) 
         canvas.style.height = `${h}px`;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      renderScene(ctx, sceneRef.current, camRef.current, w, h, themeRef.current);
+      renderScene(ctx, sceneRef.current, camRef.current, w, h, themeRef.current, clock);
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
