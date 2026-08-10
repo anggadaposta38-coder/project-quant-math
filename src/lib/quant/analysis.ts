@@ -80,6 +80,8 @@ export interface SignalState {
   entryThreshold: number;
   longZone: EntryZone | null;
   shortZone: EntryZone | null;
+  /** Alasan presisi kenapa longZone & shortZone dua-duanya null; null bila salah satu zona valid. */
+  ouZoneReason: string | null;
   rsi: number;
   macdHist: number;
   macdLine: number;
@@ -203,6 +205,30 @@ export function computeSignal(
   const longZone = canLong ? computeEntryZone("LONG", zMeanLog, sigmaZ, entryThreshold) : null;
   const shortZone = canShort ? computeEntryZone("SHORT", zMeanLog, sigmaZ, entryThreshold) : null;
 
+  // Alasan presisi kenapa tidak ada zona entry OU — dicek pada variabel yang
+  // SAMA dipakai `ouValid`/`canLong`/`canShort` di atas, urutan dari syarat
+  // paling dasar (stasioneritas) ke syarat paling atas (regime gate), supaya
+  // UI tidak lagi menampilkan alasan generik yang bisa kontradiksi dengan
+  // angka lain di panel (mis. bilang "θ ≤ 0" padahal θ jelas positif).
+  let ouZoneReason: string | null = null;
+  if (!(longZone || shortZone)) {
+    if (!ou.stationary) {
+      ouZoneReason = `Residual OU belum lolos uji stasioneritas (statistik Dickey-Fuller sederhana ${ou.dfStatistic.toFixed(2)} > ambang -2.86) — harga masih terlalu trending untuk dianggap mean-reverting saat ini.`;
+    } else if (!(Number.isFinite(ou.theta) && ou.theta > 0)) {
+      ouZoneReason = `θ = ${ou.theta.toFixed(2)} (≤ 0) — proses tidak bersifat mean-reverting saat ini.`;
+    } else if (!Number.isFinite(ou.halfLifeBars) || ou.halfLifeBars > logClose.length * 0.5) {
+      ouZoneReason = `Half-life OU (${Number.isFinite(ou.halfLifeBars) ? ou.halfLifeBars.toFixed(1) : "∞"} bar) terlalu panjang dibanding jumlah data yang tersedia (${logClose.length} bar) untuk dianggap andal.`;
+    } else if (!ou.reliable) {
+      ouZoneReason = "Fit OU belum memenuhi ambang keandalan minimum (jumlah observasi atau R² terlalu rendah).";
+    } else if (!(Number.isFinite(sigmaZ) && sigmaZ > 0)) {
+      ouZoneReason = "Deviasi Z-score bergulir (σ_z) nol atau tidak valid pada window saat ini.";
+    } else if (!regimeStable) {
+      ouZoneReason = `Regime HMM belum stabil (persistensi ${(persistence * 100).toFixed(0)}% < ambang ${(REGIME_STABLE_MIN * 100).toFixed(0)}%) — estimasi mean-reversion dianggap tidak andal saat regime baru bergeser.`;
+    } else {
+      ouZoneReason = "Zona entry tidak dapat dihitung dari parameter saat ini.";
+    }
+  }
+
   const rsiSeries = rsi(closes, RSI_PERIOD);
   const rsiNow = lastFinite(rsiSeries);
   const macdRes = macd(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL);
@@ -278,6 +304,7 @@ export function computeSignal(
     entryThreshold,
     longZone,
     shortZone,
+    ouZoneReason,
     rsi: rsiNow,
     macdHist,
     macdLine,
