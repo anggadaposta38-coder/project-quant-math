@@ -154,7 +154,9 @@ export function blackScholes(
  * Permukaan volatilitas model (bukan quote pasar).
  * Skew/smile diturunkan dari ekspansi Corrado-Su terhadap moment realized
  * (skewness s dan excess kurtosis k) pada log-moneyness x = ln(K/S):
- *   σ(x,T) = σ_ATM(T)·[1 − (s/6)·(x/(σ√T)) + (k/24)·((x/(σ√T))² − 1)]
+ *   σ(x,T) = σ_ATM(T)·[1 + (s/6)·(x/(σ√T)) + (k/24)·((x/(σ√T))² − 1)]
+ * (ekuivalen Backus et al. dengan d = −x/(σ√T): skew negatif ⇒ IV lebih tinggi
+ * pada strike rendah / OTM put.)
  * Term structure memakai mean-reversion vol ke level jangka panjang.
  */
 export function volatilitySurface(opts: {
@@ -180,7 +182,7 @@ export function volatilitySurface(opts: {
     for (const m of moneyness) {
       const x = Math.log(m); // m = K/S
       const z = x / (atm * Math.sqrt(Math.max(T, 1e-6)));
-      const adj = 1 - (skew / 6) * z + (excessKurtosis / 24) * (z * z - 1);
+      const adj = 1 + (skew / 6) * z + (excessKurtosis / 24) * (z * z - 1);
       row.push(Math.max(atm * Math.min(Math.max(adj, 0.25), 3), 1e-4));
     }
     grid.push(row);

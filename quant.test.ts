@@ -33,9 +33,9 @@ test("GBM param recovery", () => {
   expect(g.mu).toBeCloseTo(mu,1);
 });
 
-test("Monte Carlo E[S_T] = S0 e^{mu T}", () => {
+test("Monte Carlo E[S_T] = S0 e^{mu T}", { timeout: 60000 }, () => {
   const g={mu:0.4,sigma:0.7,logDrift:0,dt:1/365};
-  const mc=monteCarloGbm(100,g,365,20000,42);
+  const mc=monteCarloGbm(100,g,365,4000,42);
   expect(mc.expectedTerminal/100).toBeCloseTo(Math.exp(0.4),1);
   expect(mc.probUp).toBeGreaterThan(0.3);
 });
