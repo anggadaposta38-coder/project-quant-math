@@ -103,6 +103,7 @@ export function volSurfaceScene(
         alpha: 0.55,
         stroke: palette.grid,
         pulse: phaseOf(i * (moneyness.length - 1) + j),
+        ripple: 0.05,
       });
     }
   }
