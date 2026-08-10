@@ -7,7 +7,7 @@
  *   μ = mean(r)/dt + σ²/2      (koreksi Itô)
  */
 
-import { mean, mulberry32, normCdf, quantile, randNorm, stdev } from "./stats";
+import { mean, mulberry32, normCdf, quantile, randNorm, shrinkageWeight, stdev } from "./stats";
 
 export interface GbmParams {
   /** drift aritmetik tahunan μ */
@@ -21,7 +21,12 @@ export interface GbmParams {
 
 export function fitGbm(logRet: number[], dt: number): GbmParams {
   const sigma = stdev(logRet) / Math.sqrt(dt);
-  const logDrift = mean(logRet) / dt;
+  // σ diestimasi cukup stabil bahkan pada sampel pendek; μ (mean return)
+  // jauh lebih noisy dan meledak saat dianualisasi dari data beberapa bulan.
+  // Shrink drift mentah ke 0 sesuai jumlah tahun data yang tersedia.
+  const years = logRet.length * dt;
+  const rawLogDrift = mean(logRet) / dt;
+  const logDrift = rawLogDrift * shrinkageWeight(years);
   return { mu: logDrift + 0.5 * sigma * sigma, sigma, logDrift, dt };
 }
 
