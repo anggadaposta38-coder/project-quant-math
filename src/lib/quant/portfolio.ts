@@ -18,6 +18,7 @@ import {
   matVec,
   quadForm,
   ridge,
+  shrinkageWeight,
   type Matrix,
 } from "./stats";
 
@@ -79,8 +80,15 @@ export function analyzePortfolio(
 
   const muBar = new Array<number>(N).fill(0);
   for (let t = 0; t < T; t++) for (let j = 0; j < N; j++) muBar[j]! += R[t]![j]! / (T || 1);
-  // μ aritmetik tahunan dari log-return: μ = m·bpy + σ²/2
-  const mu = muBar.map((m, j) => m * barsPerYear + 0.5 * cov[j]![j]!);
+  // μ aritmetik tahunan dari log-return: μ = m·bpy + σ²/2.
+  // Bagian mean (m·bpy) di-shrink ke 0 berdasarkan jumlah tahun data yang
+  // tersedia — sama seperti fitGbm — agar alokasi Markowitz tidak "all-in"
+  // ke satu aset hanya karena noise mean-estimation sampel pendek yang
+  // teramplifikasi anualisasi. Koreksi Itô (σ²/2) tidak di-shrink karena
+  // diturunkan dari varians yang jauh lebih stabil.
+  const years = (T || 0) / barsPerYear;
+  const w = shrinkageWeight(years);
+  const mu = muBar.map((m, j) => m * barsPerYear * w + 0.5 * cov[j]![j]!);
 
   const Sinv = inverse(ridge(cov, 1e-4)) ?? inverse(ridge(cov, 1e-2))!;
   const { A, B } = scalars(Sinv, mu);
