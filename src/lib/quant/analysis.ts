@@ -43,6 +43,8 @@ export interface SignalState {
   hmm: HmmFit;
   regimeProbs: number[];
   regime: string;
+  /** true bila probabilitas bertahan di regime saat ini (A_ii) ≥ ambang stabil. */
+  regimeStable: boolean;
   regimePersistence: number;
   expectedDurationBars: number;
   ou: OuParams;
@@ -108,8 +110,16 @@ export function computeSignal(
   const regimeProbs = hmm.gamma[hmm.gamma.length - 1] ?? new Array(HMM_STATES).fill(1 / HMM_STATES);
   const currentState = regimeProbs.indexOf(Math.max(...regimeProbs));
   const persistence = hmm.params.A[currentState]?.[currentState] ?? 0;
+  const regime = regimeLabel(currentState, HMM_STATES);
   // Durasi ekspektasi state (geometric): E[d] = 1/(1 − A_ii)
   const expectedDurationBars = persistence < 1 ? 1 / (1 - persistence) : Infinity;
+  // Regime dianggap "stabil" bila probabilitas bertahan (A_ii) di atas ambang.
+  // Di bawah ambang ini, HMM baru saja (atau sedang) berpindah state —
+  // klasifikasi regime pada titik transisi secara empiris paling noisy,
+  // jadi entry mean-reversion (yang menganggap proses OU berlaku terhadap
+  // level ekuilibrium regime saat ini) paling berisiko salah di sini.
+  const REGIME_STABLE_MIN = 0.7;
+  const regimeStable = persistence >= REGIME_STABLE_MIN;
 
   const logClose = closes.map((c) => Math.log(c));
   const ou = fitOu(logClose, dt);
@@ -121,8 +131,18 @@ export function computeSignal(
   // Rujukan level (log-price) yang sama dipakai rollingZScore untuk z saat ini.
   const zMeanLog = mean(logClose.slice(-zWindow));
   const ouValid = Number.isFinite(ou.theta) && ou.theta > 0;
-  const longZone = ouValid ? computeEntryZone("LONG", zMeanLog, sigmaZ, entryThreshold) : null;
-  const shortZone = ouValid ? computeEntryZone("SHORT", zMeanLog, sigmaZ, entryThreshold) : null;
+  // Regime-gate (#1): LONG (bertaruh harga naik kembali ke mean) hanya masuk
+  // akal bila regime saat ini bukan Bear yang sedang berlanjut — sebaliknya
+  // untuk SHORT vs Bull. Trading melawan tren dominan yang masih kuat adalah
+  // pola loss utama yang terlihat di backtest (entry LONG lalu kena stop
+  // karena downtrend belum selesai).
+  // Persistence-gate (#2): kedua sisi mati total bila regime belum stabil
+  // (persistence < REGIME_STABLE_MIN), terlepas arahnya, karena estimasi
+  // OU/level-ekuilibrium sendiri jadi tidak reliable saat regime baru bergeser.
+  const canLong = ouValid && regimeStable && regime !== "Bear";
+  const canShort = ouValid && regimeStable && regime !== "Bull";
+  const longZone = canLong ? computeEntryZone("LONG", zMeanLog, sigmaZ, entryThreshold) : null;
+  const shortZone = canShort ? computeEntryZone("SHORT", zMeanLog, sigmaZ, entryThreshold) : null;
 
   const rsiSeries = rsi(closes, 14);
   const rsiNow = lastFinite(rsiSeries);
@@ -167,7 +187,8 @@ export function computeSignal(
     excessKurtosis,
     hmm,
     regimeProbs,
-    regime: regimeLabel(currentState, HMM_STATES),
+    regime,
+    regimeStable,
     regimePersistence: persistence,
     expectedDurationBars,
     ou,
