@@ -135,50 +135,98 @@ function Dashboard() {
     retry: 1,
   });
 
-  const analyses = useMemo<SymbolAnalysis[]>(() => {
-    if (!data) return [];
-    return data.series
-      .filter((s) => s.candles.length > 120)
-      .map((s) => analyzeSymbol(s.symbol, s.candles, data.interval));
+  // Model calculations are intentionally isolated per asset. A single bad/unstable
+  // fit must not crash the whole dashboard after market data has loaded.
+  const { analyses, analysisErrors } = useMemo(() => {
+    if (!data) return { analyses: [] as SymbolAnalysis[], analysisErrors: [] as string[] };
+
+    const nextAnalyses: SymbolAnalysis[] = [];
+    const nextErrors: string[] = [];
+
+    for (const series of data.series) {
+      if (series.candles.length <= 120) continue;
+
+      try {
+        nextAnalyses.push(analyzeSymbol(series.symbol, series.candles, data.interval));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[model:${series.symbol}]`, err);
+        nextErrors.push(`${series.symbol}: ${message}`);
+      }
+    }
+
+    return { analyses: nextAnalyses, analysisErrors: nextErrors };
   }, [data]);
 
   const active = analyses.find((a) => a.symbol === symbol) ?? analyses[0];
 
-  const portfolio = useMemo(() => {
-    if (!data || data.series.length < 2) return null;
-    const { R, labels } = alignedReturns(data.series, data.interval);
-    if (R.length < 30) return null;
-    return {
-      ...analyzePortfolio(R, BARS_PER_YEAR[data.interval]),
-      labels,
-      pcaResult: pca(R),
-    };
+  // Portfolio/PCA is optional. If one matrix/model calculation is numerically
+  // unstable, keep the asset dashboard alive and simply hide this module.
+  const { portfolio, portfolioError } = useMemo(() => {
+    if (!data || data.series.length < 2) {
+      return { portfolio: null, portfolioError: null as string | null };
+    }
+
+    try {
+      const { R, labels } = alignedReturns(data.series, data.interval);
+      if (R.length < 30) return { portfolio: null, portfolioError: null };
+
+      return {
+        portfolio: {
+          ...analyzePortfolio(R, BARS_PER_YEAR[data.interval]),
+          labels,
+          pcaResult: pca(R),
+        },
+        portfolioError: null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[portfolio]", err);
+      return { portfolio: null, portfolioError: message };
+    }
   }, [data]);
 
-  const scene = useMemo(() => {
-    if (!active) return null;
-    switch (view) {
-      case "mc":
-        return monteCarloScene(active.mc, active.price, palette);
-      case "vol":
-        return volSurfaceScene(active.surface, palette);
-      case "hmm":
-        return hmmScene(active.statePoints, palette, HMM_STATES);
-      case "frontier":
-        return portfolio
-          ? frontierScene(portfolio.frontier, portfolio.labels, palette)
-          : null;
-      case "pca":
-        return portfolio
-          ? pcaScene(
-              portfolio.pcaResult.scores3d.slice(-Math.min(600, portfolio.pcaResult.scores3d.length)),
-              active.hmm.viterbi.slice(-600),
-              palette,
-              HMM_STATES,
-            )
-          : null;
-      default:
-        return null;
+  // Scene generation is also isolated because a malformed model result should
+  // disable only the 3D surface, not the complete React route.
+  const { scene, sceneError } = useMemo(() => {
+    if (!active) return { scene: null, sceneError: null as string | null };
+
+    try {
+      switch (view) {
+        case "mc":
+          return { scene: monteCarloScene(active.mc, active.price, palette), sceneError: null };
+        case "vol":
+          return { scene: volSurfaceScene(active.surface, palette), sceneError: null };
+        case "hmm":
+          return { scene: hmmScene(active.statePoints, palette, HMM_STATES), sceneError: null };
+        case "frontier":
+          return {
+            scene: portfolio
+              ? frontierScene(portfolio.frontier, portfolio.labels, palette)
+              : null,
+            sceneError: null,
+          };
+        case "pca":
+          return {
+            scene: portfolio
+              ? pcaScene(
+                  portfolio.pcaResult.scores3d.slice(
+                    -Math.min(600, portfolio.pcaResult.scores3d.length),
+                  ),
+                  active.hmm.viterbi.slice(-600),
+                  palette,
+                  HMM_STATES,
+                )
+              : null,
+            sceneError: null,
+          };
+        default:
+          return { scene: null, sceneError: null };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[scene:${view}]`, err);
+      return { scene: null, sceneError: message };
     }
   }, [active, view, palette, portfolio]);
 
@@ -281,11 +329,21 @@ function Dashboard() {
         </div>
       ) : null}
 
+      {analysisErrors.length ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mb-4 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground"
+        >
+          <span className="font-medium text-foreground">{analysisErrors.length} pair dilewati</span> karena fit model tidak stabil. Aset lain tetap tersedia.
+        </div>
+      ) : null}
+
       {isLoading && !data ? (
         <div className="panel grid h-64 place-items-center text-sm text-muted-foreground">
           Mengambil data pasar & mem-fit model…
         </div>
-      ) : (isError && !data) || !active ? (
+      ) : (isError && !data) ? (
         <div className="panel p-6">
           <h2 className="text-sm font-semibold text-bear">Data pasar tidak tersedia</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
@@ -297,6 +355,17 @@ function Dashboard() {
           <p className="tabular mt-2 text-xs text-muted-foreground">
             {error instanceof Error ? error.message : ""}
           </p>
+        </div>
+      ) : !active ? (
+        <div className="panel p-6">
+          <h2 className="text-sm font-semibold text-bear">Model tidak dapat dihitung</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Data pasar berhasil diterima, tetapi semua fit model yang memenuhi syarat gagal.
+            Dashboard tidak dihentikan oleh satu kegagalan aset. Coba refresh data beberapa saat lagi.
+          </p>
+          {analysisErrors.length ? (
+            <p className="tabular mt-2 text-xs text-muted-foreground">{analysisErrors[0]}</p>
+          ) : null}
         </div>
       ) : (
         <div className="grid gap-5 xl:grid-cols-[300px_1fr]">
@@ -545,8 +614,10 @@ function Dashboard() {
                   </Suspense>
                 </SectionErrorBoundary>
               ) : (
-                <div className="grid h-[300px] place-items-center text-sm text-muted-foreground sm:h-[380px]">
-                  Butuh minimal 2 aset dengan riwayat cukup untuk visual ini.
+                <div className="grid h-[300px] place-items-center px-4 text-center text-sm text-muted-foreground sm:h-[380px]">
+                  {sceneError
+                    ? "Visualisasi ini gagal dihitung untuk data saat ini. Dashboard utama tetap aktif."
+                    : "Butuh minimal 2 aset dengan riwayat cukup untuk visual ini."}
                 </div>
               )}
             </Panel>
@@ -618,6 +689,16 @@ function Dashboard() {
                     diversifikasi.
                   </p>
                 </Panel>
+              </div>
+            ) : null}
+
+            {portfolioError ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground"
+              >
+                Modul portofolio/PCA dilewati karena perhitungan numeriknya gagal. Dashboard aset tetap berjalan.
               </div>
             ) : null}
 
