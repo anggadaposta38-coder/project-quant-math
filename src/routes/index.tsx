@@ -519,12 +519,22 @@ function Dashboard() {
 
             {/* Zona Entry */}
             {(() => {
+              // Zona entry OU adalah sinyal terpisah dari skor komposit (persis seperti
+              // backtest membedakan "Strategi 1 · komposit" vs "Strategi 2 · OU zone" —
+              // lihat backtest.ts). Sebelumnya panel ini disyaratkan `active.action`
+              // (LONG/SHORT dari skor komposit) sebelum mau menampilkan longZone/
+              // shortZone, sehingga zona OU yang valid (θ>0, reliable, stationary)
+              // disembunyikan begitu skor komposit WAIT — lalu memakai pesan generik
+              // "θ ≤ 0" yang bisa langsung kontradiksi dengan angka OU θ di atasnya.
+              // Tampilkan zona OU berdasarkan keberadaannya sendiri; skor komposit
+              // hanya dipakai sebagai tie-breaker kalau regime Sideways membuat
+              // longZone & shortZone valid bersamaan.
               const zone =
-                active.action === "LONG"
-                  ? active.longZone
-                  : active.action === "SHORT"
-                    ? active.shortZone
-                    : null;
+                active.longZone && active.shortZone
+                  ? active.score >= 0
+                    ? active.longZone
+                    : active.shortZone
+                  : (active.longZone ?? active.shortZone);
               const triggered =
                 zone &&
                 (zone.direction === "LONG"
@@ -536,7 +546,7 @@ function Dashboard() {
                   subtitle={
                     zone
                       ? `Arah ${zone.direction} · R:R ${zone.riskReward.toFixed(2)}x · ${triggered ? "harga sudah di zona" : "menunggu harga mencapai zona"}`
-                      : "Belum ada sinyal LONG/SHORT aktif, atau harga tidak bersifat mean-reverting (θ ≤ 0) saat ini."
+                      : "Model OU saat ini tidak mean-reverting yang cukup andal (θ ≤ 0, belum stasioner, atau sampel terlalu pendek/regime baru bergeser) — bukan berarti skor komposit sedang WAIT."
                   }
                   formula="P(z) = exp(μ_roll + z·σ_z) — z dari optimal stopping OU"
                 >
