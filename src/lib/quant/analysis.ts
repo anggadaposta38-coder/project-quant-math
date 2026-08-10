@@ -4,11 +4,13 @@ import type { Candle, Interval } from "@/lib/market.server";
 import { BARS_PER_YEAR } from "@/lib/market.server";
 import { fitHmm, regimeLabel, type HmmFit } from "./hmm";
 import {
+  computeEntryZone,
   fitGbm,
   fitOu,
   monteCarloGbm,
   optimalEntryThreshold,
   volatilitySurface,
+  type EntryZone,
   type GbmParams,
   type MonteCarloResult,
   type OuParams,
@@ -43,6 +45,8 @@ export interface SymbolAnalysis {
   z: number;
   zSeries: number[];
   entryThreshold: number;
+  longZone: EntryZone | null;
+  shortZone: EntryZone | null;
   rsi: number;
   macdHist: number;
   macdLine: number;
@@ -110,6 +114,11 @@ export function analyzeSymbol(
   const z = lastFinite(zSeries);
   const sigmaZ = stdev(logClose.slice(-zWindow));
   const entryThreshold = optimalEntryThreshold(ou, sigmaZ, riskFree);
+  // Rujukan level (log-price) yang sama dipakai rollingZScore untuk z saat ini.
+  const zMeanLog = mean(logClose.slice(-zWindow));
+  const ouValid = Number.isFinite(ou.theta) && ou.theta > 0;
+  const longZone = ouValid ? computeEntryZone("LONG", zMeanLog, sigmaZ, entryThreshold) : null;
+  const shortZone = ouValid ? computeEntryZone("SHORT", zMeanLog, sigmaZ, entryThreshold) : null;
 
   const rsiSeries = rsi(closes, 14);
   const rsiNow = lastFinite(rsiSeries);
@@ -164,6 +173,8 @@ export function analyzeSymbol(
     z,
     zSeries,
     entryThreshold,
+    longZone,
+    shortZone,
     rsi: rsiNow,
     macdHist,
     macdLine,

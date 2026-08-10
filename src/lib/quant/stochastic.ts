@@ -254,9 +254,14 @@ export function fitOu(x: number[], dt: number): OuParams {
  *   - peluang kesempatan itu muncul (densitas stasioner): Φ(z)
  * Objektif: V(z) = Φ(z) · (|z| − |z_exit|)·σ_z · e^{−r·τ(z)} → dimaksimalkan.
  */
+export const OU_Z_EXIT = 0.25;
+/** Buffer stop-loss (dalam σ_z) di luar entry: seberapa jauh lagi harga boleh
+ * bergerak melawan posisi sebelum tesis mean-reversion dianggap gagal. */
+export const OU_STOP_BUFFER_Z = 1.0;
+
 export function optimalEntryThreshold(ou: OuParams, sigmaZ: number, r = 0.05): number {
   if (!Number.isFinite(ou.theta) || ou.theta <= 0) return -2;
-  const zExit = 0.25;
+  const zExit = OU_Z_EXIT;
   let best = -2;
   let bestVal = -Infinity;
   for (let z = -3.5; z <= -0.3; z += 0.01) {
@@ -271,5 +276,55 @@ export function optimalEntryThreshold(ou: OuParams, sigmaZ: number, r = 0.05): n
     }
   }
   return best;
+}
+
+export interface EntryZone {
+  direction: "LONG" | "SHORT";
+  /** harga masuk (level oversold/overbought optimal, dari optimalEntryThreshold) */
+  entry: number;
+  /** harga stop-loss (tesis mean-reversion dianggap gagal jika tertembus) */
+  stop: number;
+  /** harga target (exit di z_exit, harga sudah pulih sebagian ke arah mean) */
+  target: number;
+  /** rasio |target − entry| / |entry − stop| */
+  riskReward: number;
+}
+
+/**
+ * Konversi ambang z-score (dari optimalEntryThreshold, OU) menjadi zona harga.
+ * P(z) = exp(refLog + z·σ_z), dengan refLog = rata-rata bergulir log-price
+ * (rujukan yang sama dipakai rollingZScore untuk menghitung z saat ini).
+ *
+ * SHORT adalah cerminan LONG (proses OU simetris terhadap μ): entry di
+ * +|entryThreshold|, exit di +z_exit. Stop diletakkan OU_STOP_BUFFER_Z lebih
+ * jauh dari entry, ke arah yang melawan posisi.
+ *
+ * Asumsi: refLog & σ_z dianggap tetap dari sekarang sampai harga menyentuh
+ * zona — estimasi snapshot, bukan proyeksi harga masa depan.
+ */
+export function computeEntryZone(
+  direction: "LONG" | "SHORT",
+  refLog: number,
+  sigmaZ: number,
+  entryThresholdNeg: number,
+): EntryZone | null {
+  if (!Number.isFinite(entryThresholdNeg) || !Number.isFinite(sigmaZ) || sigmaZ <= 0) {
+    return null;
+  }
+  const sign = direction === "LONG" ? 1 : -1;
+  const zEntry = sign * entryThresholdNeg; // LONG: negatif (oversold), SHORT: positif (overbought)
+  const zTarget = -sign * OU_Z_EXIT; // LONG: -0.25, SHORT: +0.25
+  const zStop = zEntry - sign * OU_STOP_BUFFER_Z; // lebih jauh ke arah melawan posisi
+
+  const toPrice = (z: number) => Math.exp(refLog + z * sigmaZ);
+  const entry = toPrice(zEntry);
+  const stop = toPrice(zStop);
+  const target = toPrice(zTarget);
+
+  const risk = Math.abs(entry - stop);
+  const reward = Math.abs(target - entry);
+  const riskReward = risk > 0 ? reward / risk : 0;
+
+  return { direction, entry, stop, target, riskReward };
 }
 
