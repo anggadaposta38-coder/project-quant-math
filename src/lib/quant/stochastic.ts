@@ -80,17 +80,42 @@ export function monteCarloGbm(
 
   const normalizedSeed = Math.trunc(seed) >>> 0;
   const rng = mulberry32(normalizedSeed);
+
+  // Simulate in log-price space. Multiplying the price at every step can
+  // overflow to Infinity when a fitted crypto volatility is temporarily
+  // extreme, even though all GBM parameters are finite. The log-space form
+  // preserves the exact GBM update while keeping the intermediate exponent
+  // inside JavaScript's representable positive-number range.
   const drift = (p.mu - 0.5 * p.sigma * p.sigma) * p.dt;
   const vol = p.sigma * Math.sqrt(p.dt);
   if (![drift, vol].every(Number.isFinite)) throw new Error("Parameter Monte Carlo menghasilkan NaN/Infinity.");
+
+  const logS0 = Math.log(s0);
+  const MAX_LOG_PRICE = Math.log(Number.MAX_VALUE);
+  const MIN_LOG_PRICE = Math.log(Number.MIN_VALUE);
+  if (!Number.isFinite(logS0)) throw new Error("Harga awal Monte Carlo menghasilkan log yang tidak valid.");
+
   const paths: number[][] = [];
 
   for (let i = 0; i < nPaths; i++) {
     const path = new Array<number>(steps + 1);
     path[0] = s0;
-    let s = s0;
+    let logS = logS0;
     for (let t = 1; t <= steps; t++) {
-      s = s * Math.exp(drift + vol * randNorm(rng));
+      const increment = drift + vol * randNorm(rng);
+      if (!Number.isFinite(increment)) {
+        throw new Error("Monte Carlo shock menghasilkan NaN/Infinity.");
+      }
+
+      logS += increment;
+      // Clamp only at the floating-point representable boundaries. This is
+      // not a model-parameter cap: it prevents JS exp() overflow/underflow
+      // from poisoning all 600 paths with Infinity/0.
+      logS = Math.min(MAX_LOG_PRICE, Math.max(MIN_LOG_PRICE, logS));
+      const s = Math.exp(logS);
+      if (!Number.isFinite(s) || s <= 0) {
+        throw new Error("Monte Carlo menghasilkan harga non-finite.");
+      }
       path[t] = s;
     }
     paths.push(path);
