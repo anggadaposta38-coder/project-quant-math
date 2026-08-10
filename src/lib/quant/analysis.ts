@@ -20,8 +20,14 @@ import { kurtosis, logReturns, mean, skewness, stdev } from "./stats";
 
 export const HMM_STATES = 3;
 
-export interface SymbolAnalysis {
-  symbol: string;
+/**
+ * Semua yang dibutuhkan untuk MEMUTUSKAN posisi (regime, mean-reversion,
+ * timing entry, skor komposit). Sengaja TIDAK termasuk Monte Carlo cone /
+ * volatility surface — keduanya untuk visualisasi risiko, bukan input
+ * keputusan LONG/SHORT/WAIT, dan mahal untuk dihitung berulang kali (dipakai
+ * juga oleh backtest walk-forward yang me-refit di banyak checkpoint).
+ */
+export interface SignalState {
   price: number;
   changePct: number;
   dt: number;
@@ -39,8 +45,6 @@ export interface SymbolAnalysis {
   regime: string;
   regimePersistence: number;
   expectedDurationBars: number;
-  mc: MonteCarloResult;
-  surface: { grid: number[][]; moneyness: number[]; maturities: number[] };
   ou: OuParams;
   z: number;
   zSeries: number[];
@@ -56,6 +60,12 @@ export interface SymbolAnalysis {
   statePoints: { ret: number; vol: number; state: number }[];
 }
 
+export interface SymbolAnalysis extends SignalState {
+  symbol: string;
+  mc: MonteCarloResult;
+  surface: { grid: number[][]; moneyness: number[]; maturities: number[] };
+}
+
 const clamp = (v: number, lo = -1, hi = 1) => Math.min(hi, Math.max(lo, v));
 
 /** Volatilitas bergulir (annualized) untuk sumbu Y ruang state HMM. */
@@ -67,13 +77,18 @@ function rollingVol(r: number[], window: number, dt: number): number[] {
   return out;
 }
 
-export function analyzeSymbol(
-  symbol: string,
+/**
+ * Hitung state sinyal (regime, mean-reversion, entry zone, skor komposit)
+ * murni dari candle yang diberikan — tanpa lookahead: hanya memakai bar
+ * candles[0..n-1]. Dipakai baik oleh dashboard live (lewat analyzeSymbol)
+ * maupun backtest walk-forward (lewat backtest.ts), sehingga logika
+ * matematika sinyal hanya ada di satu tempat.
+ */
+export function computeSignal(
   candles: Candle[],
   interval: Interval,
-  horizonBars = 72,
   riskFree = 0.04,
-): SymbolAnalysis {
+): SignalState {
   const barsPerYear = BARS_PER_YEAR[interval];
   const dt = 1 / barsPerYear;
   const closes = candles.map((c) => c.c);
@@ -95,17 +110,6 @@ export function analyzeSymbol(
   const persistence = hmm.params.A[currentState]?.[currentState] ?? 0;
   // Durasi ekspektasi state (geometric): E[d] = 1/(1 − A_ii)
   const expectedDurationBars = persistence < 1 ? 1 / (1 - persistence) : Infinity;
-
-  const mc = monteCarloGbm(price, gbm, horizonBars, 600);
-
-  const surface = volatilitySurface({
-    sigmaShort,
-    sigmaLong,
-    skew,
-    excessKurtosis,
-    moneyness: Array.from({ length: 17 }, (_, i) => 0.6 + i * 0.05),
-    maturities: Array.from({ length: 12 }, (_, i) => (7 + i * 14) / 365),
-  });
 
   const logClose = closes.map((c) => Math.log(c));
   const ou = fitOu(logClose, dt);
@@ -140,7 +144,7 @@ export function analyzeSymbol(
   const kelly = gbm.sigma > 0 ? (gbm.mu - riskFree) / (gbm.sigma * gbm.sigma) : 0;
   const kellyFraction = clamp(kelly * 0.25, -1, 1);
 
-  const action: SymbolAnalysis["action"] =
+  const action: SignalState["action"] =
     score > 0.22 ? "LONG" : score < -0.22 ? "SHORT" : "WAIT";
 
   const vols = rollingVol(logRet, Math.min(20, Math.max(5, Math.floor(logRet.length / 20))), dt);
@@ -149,7 +153,6 @@ export function analyzeSymbol(
     .filter((p) => Number.isFinite(p.vol));
 
   return {
-    symbol,
     price,
     changePct: prev > 0 ? (price / prev - 1) * 100 : 0,
     dt,
@@ -167,8 +170,6 @@ export function analyzeSymbol(
     regime: regimeLabel(currentState, HMM_STATES),
     regimePersistence: persistence,
     expectedDurationBars,
-    mc,
-    surface,
     ou,
     z,
     zSeries,
@@ -183,6 +184,27 @@ export function analyzeSymbol(
     kellyFraction,
     statePoints,
   };
+}
+
+export function analyzeSymbol(
+  symbol: string,
+  candles: Candle[],
+  interval: Interval,
+  horizonBars = 72,
+  riskFree = 0.04,
+): SymbolAnalysis {
+  const signal = computeSignal(candles, interval, riskFree);
+  const mc = monteCarloGbm(signal.price, signal.gbm, horizonBars, 600);
+  const surface = volatilitySurface({
+    sigmaShort: signal.sigmaShort,
+    sigmaLong: signal.sigmaLong,
+    skew: signal.skew,
+    excessKurtosis: signal.excessKurtosis,
+    moneyness: Array.from({ length: 17 }, (_, i) => 0.6 + i * 0.05),
+    maturities: Array.from({ length: 12 }, (_, i) => (7 + i * 14) / 365),
+  });
+
+  return { symbol, ...signal, mc, surface };
 }
 
 /** Matriks return T×N yang disejajarkan (panjang minimum lintas aset). */
