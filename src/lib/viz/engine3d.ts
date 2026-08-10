@@ -7,18 +7,30 @@ export interface Point3 {
   color: string;
   size?: number;
   alpha?: number;
+  /** Fase 0..1 (unik per titik) — dipakai untuk breathing/glow & jitter agar tidak semua titik berdenyut/bergoyang serempak. */
+  phase?: number;
+  /** Aktifkan breathing/glow: ukuran & alpha berdenyut halus mengikuti waktu. */
+  glow?: boolean;
+  /** Amplitudo gerakan mikro acak (dalam satuan ruang lokal, biasanya ~0.01–0.03). 0/undefined = diam. */
+  jitter?: number;
 }
 export interface Line3 {
   pts: Vec3[];
   color: string;
   width?: number;
   alpha?: number;
+  /** Aktifkan animasi "mengalir" sepanjang garis (dash bergerak/marching ants). */
+  flow?: boolean;
+  /** Kecepatan animasi flow, relatif. Default 1. */
+  flowSpeed?: number;
 }
 export interface Quad3 {
   pts: [Vec3, Vec3, Vec3, Vec3];
   color: string;
   alpha?: number;
   stroke?: string;
+  /** Fase 0..1 — bila diisi, alpha quad berkedip halus (shimmer) mengikuti waktu. */
+  pulse?: number;
 }
 
 export interface Scene3D {
@@ -65,9 +77,18 @@ export function project(
 
 function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, fn: () => void) {
   const prev = ctx.globalAlpha;
-  ctx.globalAlpha = alpha;
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
   fn();
   ctx.globalAlpha = prev;
+}
+
+/** Offset posisi 3D dengan gerakan mikro acak (deterministik dari fase, bukan Math.random). */
+function jitterOffset(p: Vec3, amount: number, phase: number, time: number): Vec3 {
+  const ph = phase * Math.PI * 2;
+  const jx = Math.sin(time * 0.6 + ph) * amount;
+  const jy = Math.cos(time * 0.5 + ph * 1.3) * amount;
+  const jz = Math.sin(time * 0.4 + ph * 0.7) * amount;
+  return [p[0] + jx, p[1] + jy, p[2] + jz];
 }
 
 const AXIS_EDGES: [Vec3, Vec3][] = [
@@ -92,6 +113,8 @@ export function renderScene(
   w: number,
   h: number,
   theme: { grid: string; text: string },
+  /** Jam animasi dalam detik, berjalan terus (independen dari toggle rotate kamera) — dipakai untuk breathing, jitter, dan flow. */
+  time = 0,
 ) {
   ctx.clearRect(0, 0, w, h);
 
@@ -115,6 +138,8 @@ export function renderScene(
   for (const q of scene.quads ?? []) {
     const proj = q.pts.map((p) => project(p, cam, w, h));
     const depth = proj.reduce((s, p) => s + p.depth, 0) / 4;
+    const shimmer =
+      q.pulse !== undefined ? 1 + 0.12 * Math.sin(time * 1.2 + q.pulse * Math.PI * 2) : 1;
     items.push({
       depth,
       draw: () => {
@@ -122,7 +147,7 @@ export function renderScene(
         ctx.moveTo(proj[0]!.x, proj[0]!.y);
         for (let i = 1; i < 4; i++) ctx.lineTo(proj[i]!.x, proj[i]!.y);
         ctx.closePath();
-        withAlpha(ctx, q.alpha ?? 1, () => {
+        withAlpha(ctx, (q.alpha ?? 1) * shimmer, () => {
           ctx.fillStyle = q.color;
           ctx.fill();
           if (q.stroke) {
@@ -145,25 +170,47 @@ export function renderScene(
         withAlpha(ctx, l.alpha ?? 1, () => {
           ctx.strokeStyle = l.color;
           ctx.lineWidth = l.width ?? 1;
+          if (l.flow) {
+            const dash = Math.max(3, (l.width ?? 1) * 3);
+            ctx.setLineDash([dash, dash * 1.4]);
+            ctx.lineDashOffset = -time * 26 * (l.flowSpeed ?? 1);
+          }
           ctx.beginPath();
           ctx.moveTo(proj[0]!.x, proj[0]!.y);
           for (let i = 1; i < proj.length; i++) ctx.lineTo(proj[i]!.x, proj[i]!.y);
           ctx.stroke();
+          if (l.flow) {
+            ctx.setLineDash([]);
+            ctx.lineDashOffset = 0;
+          }
         });
       },
     });
   }
 
   for (const pt of scene.points ?? []) {
-    const pr = project(pt.p, cam, w, h);
+    const phase = pt.phase ?? 0;
+    const worldP = pt.jitter ? jitterOffset(pt.p, pt.jitter, phase, time) : pt.p;
+    const pr = project(worldP, cam, w, h);
+    const pulse = pt.glow ? 0.72 + 0.28 * Math.sin(time * 1.8 + phase * Math.PI * 2) : 1;
     items.push({
       depth: pr.depth,
       draw: () => {
-        const r = ((pt.size ?? 2) * 2.6) / Math.max(pr.depth, 0.3);
-        withAlpha(ctx, pt.alpha ?? 1, () => {
+        const baseR = ((pt.size ?? 2) * 2.6) / Math.max(pr.depth, 0.3);
+        const r = Math.max(baseR * pulse, 0.6);
+        if (pt.glow) {
+          // Halo lembut di belakang titik utama untuk kesan berpendar.
+          withAlpha(ctx, (pt.alpha ?? 1) * 0.22 * pulse, () => {
+            ctx.fillStyle = pt.color;
+            ctx.beginPath();
+            ctx.arc(pr.x, pr.y, r * 2.4, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+        withAlpha(ctx, (pt.alpha ?? 1) * (pt.glow ? Math.min(1, 0.55 + 0.45 * pulse) : 1), () => {
           ctx.fillStyle = pt.color;
           ctx.beginPath();
-          ctx.arc(pr.x, pr.y, Math.max(r, 0.6), 0, Math.PI * 2);
+          ctx.arc(pr.x, pr.y, r, 0, Math.PI * 2);
           ctx.fill();
         });
       },
@@ -216,4 +263,9 @@ export function extent(values: number[]): [number, number] {
   if (!Number.isFinite(mn)) return [0, 1];
   if (mn === mx) return [mn - 1, mx + 1];
   return [mn, mx];
+}
+
+/** Fase 0..1 deterministik dari index — sebaran merata (golden-ratio increment), bukan acak murni, supaya konsisten antar-frame tanpa perlu disimpan. */
+export function phaseOf(i: number): number {
+  return (i * 0.6180339887498949) % 1;
 }
