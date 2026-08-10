@@ -31,6 +31,14 @@ export interface Quad3 {
   stroke?: string;
   /** Fase 0..1 — bila diisi, alpha quad berkedip halus (shimmer) mengikuti waktu. */
   pulse?: number;
+  /**
+   * Amplitudo riak/gelombang (dalam satuan ruang lokal, ~0.03–0.06). Bila
+   * diisi, sumbu-Y tiap vertex quad ini digoyang oleh fungsi gelombang
+   * berbasis posisi (x,z) + waktu — seperti kain tertiup angin. Dihitung
+   * dari posisi asli tiap vertex, jadi quad-quad tetangga yang berbagi
+   * sudut tetap menyatu mulus (mesh tidak robek).
+   */
+  ripple?: number;
 }
 
 export interface Scene3D {
@@ -91,6 +99,21 @@ function jitterOffset(p: Vec3, amount: number, phase: number, time: number): Vec
   return [p[0] + jx, p[1] + jy, p[2] + jz];
 }
 
+/**
+ * Gelombang berjalan (dua frekuensi dijumlahkan agar terasa organik, bukan
+ * riak seragam) — menggeser sumbu-Y (tinggi) berdasarkan posisi (x,z) & waktu.
+ * Karena hanya fungsi dari posisi asli + waktu (bukan index acak), dua quad
+ * bertetangga yang berbagi titik sudut yang sama akan menghasilkan offset
+ * yang sama persis di titik itu → mesh tetap menyatu, tidak robek.
+ */
+function rippleOffset(p: Vec3, amp: number, time: number): Vec3 {
+  const [x, y, z] = p;
+  const wave =
+    Math.sin(x * 2.4 + z * 1.7 + time * 1.1) * 0.6 +
+    Math.sin(x * 1.15 - z * 2.6 + time * 0.75) * 0.4;
+  return [x, y + wave * amp, z];
+}
+
 const AXIS_EDGES: [Vec3, Vec3][] = [
   [[-1, -1, -1], [1, -1, -1]],
   [[-1, -1, -1], [-1, 1, -1]],
@@ -136,7 +159,8 @@ export function renderScene(
   const items: Item[] = [];
 
   for (const q of scene.quads ?? []) {
-    const proj = q.pts.map((p) => project(p, cam, w, h));
+    const worldPts = q.ripple ? q.pts.map((p) => rippleOffset(p, q.ripple!, time)) : q.pts;
+    const proj = worldPts.map((p) => project(p, cam, w, h));
     const depth = proj.reduce((s, p) => s + p.depth, 0) / 4;
     const shimmer =
       q.pulse !== undefined ? 1 + 0.12 * Math.sin(time * 1.2 + q.pulse * Math.PI * 2) : 1;
