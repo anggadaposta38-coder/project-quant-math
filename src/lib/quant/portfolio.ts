@@ -298,3 +298,92 @@ export function maxSharpeLongOnly(
   };
 }
 
+/**
+ * Principal Component Analysis (PCA) pada matriks return T×N.
+ *
+ * Return:
+ * - scores3d: proyeksi setiap observasi ke PC1/PC2/PC3.
+ * - explained: proporsi variance yang dijelaskan tiap PC.
+ * - eigenvalues: eigenvalue PCA, terurut menurun.
+ * - loadings: eigenvector utama (aset × PC).
+ *
+ * PCA menggunakan return yang distandarisasi sehingga aset dengan skala
+ * volatilitas berbeda tidak mendominasi ruang eigen hanya karena unitnya.
+ */
+export function pca(
+  R: Matrix,
+  components = 3,
+): {
+  scores3d: { x: number; y: number; z: number }[];
+  scores: Matrix;
+  loadings: Matrix;
+  eigenvalues: number[];
+  explained: number[];
+} {
+  const T = R.length;
+  const N = T > 0 ? R[0]!.length : 0;
+  if (T < 2 || N === 0) throw new Error("PCA membutuhkan minimal 2 observasi dan 1 aset.");
+  if (!Number.isInteger(components) || components < 1) {
+    throw new Error("Jumlah komponen PCA harus integer >= 1.");
+  }
+  if (R.some((row) => row.length !== N || row.some((v) => !Number.isFinite(v)))) {
+    throw new Error("Matriks return PCA tidak valid atau mengandung NaN/Infinity.");
+  }
+
+  const means = new Array<number>(N).fill(0);
+  for (let t = 0; t < T; t++) {
+    for (let j = 0; j < N; j++) means[j]! += R[t]![j]! / T;
+  }
+
+  const stds = new Array<number>(N).fill(0);
+  for (let t = 0; t < T; t++) {
+    for (let j = 0; j < N; j++) {
+      const d = R[t]![j]! - means[j]!;
+      stds[j]! += d * d;
+    }
+  }
+  for (let j = 0; j < N; j++) {
+    stds[j] = Math.sqrt(stds[j]! / Math.max(T - 1, 1));
+    if (!(stds[j]! > 0) || !Number.isFinite(stds[j]!)) {
+      throw new Error(`PCA tidak dapat dilakukan: variance aset ke-${j + 1} nol/degeneratif.`);
+    }
+  }
+
+  const Z: Matrix = R.map((row) =>
+    row.map((v, j) => (v - means[j]!) / stds[j]!),
+  );
+
+  const corr = covarianceMatrix(Z);
+  const eig = jacobiEigen(corr);
+  const total = eig.values.reduce((sum, v) => sum + Math.max(v, 0), 0);
+  if (!(total > 0) || !Number.isFinite(total)) {
+    throw new Error("PCA menghasilkan total eigenvalue yang tidak valid.");
+  }
+
+  const k = Math.min(components, N);
+  const eigenvalues = eig.values.slice(0, k).map((v) => Math.max(v, 0));
+  const explained = eigenvalues.map((v) => v / total);
+  const loadings: Matrix = Array.from({ length: N }, (_, i) =>
+    Array.from({ length: k }, (_, c) => eig.vectors[i]![c]!),
+  );
+
+  const scores: Matrix = Z.map((row) =>
+    Array.from({ length: k }, (_, c) => {
+      let s = 0;
+      for (let j = 0; j < N; j++) s += row[j]! * loadings[j]![c]!;
+      return s;
+    }),
+  );
+
+  if ([...eigenvalues, ...explained, ...loadings.flat(), ...scores.flat()].some((v) => !Number.isFinite(v))) {
+    throw new Error("PCA menghasilkan NaN/Infinity.");
+  }
+
+  const scores3d = scores.map((row) => ({
+    x: row[0] ?? 0,
+    y: row[1] ?? 0,
+    z: row[2] ?? 0,
+  }));
+
+  return { scores3d, scores, loadings, eigenvalues, explained };
+}
