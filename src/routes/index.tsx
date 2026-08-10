@@ -19,6 +19,7 @@ import {
 import { analyzePortfolio, pca } from "@/lib/quant/portfolio";
 import { Panel, Stat } from "@/components/dashboard/Panel";
 import { ProbBar, Sparkline } from "@/components/dashboard/Sparkline";
+import { BacktestPanel } from "@/components/dashboard/BacktestPanel";
 import { Plot3D } from "@/components/viz/Plot3D";
 import { usePalette } from "@/lib/viz/palette";
 import {
@@ -536,6 +537,14 @@ function Dashboard() {
                 </Panel>
               </div>
             ) : null}
+
+            {/* Backtest */}
+            {(() => {
+              const series = data?.series.find((s) => s.symbol === active.symbol);
+              return series ? (
+                <BacktestPanel symbol={active.symbol} candles={series.candles} interval={interval} />
+              ) : null;
+            })()}
 
             {/* Catatan */}
             <Panel
