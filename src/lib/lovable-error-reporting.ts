@@ -1,3 +1,5 @@
+import { sanitizeDiagnosticText } from "./diagnostic-utils";
+
 type LovableErrorOptions = {
   mechanism?: "manual" | "onerror" | "unhandledrejection" | "react_error_boundary";
   handled?: boolean;
@@ -45,11 +47,11 @@ export function reportLovableError(error: unknown, context: Record<string, unkno
   // opaque "[object Response]", so pull out the status and URL instead.
   const message =
     error instanceof Response
-      ? `Response ${error.status}${error.url ? ` at ${error.url}` : ""}`
+      ? `Response ${error.status}${error.url ? ` at ${sanitizeDiagnosticText(error.url)}` : ""}`
       : error instanceof Error
-        ? error.message
-        : String(error);
-  const stack = error instanceof Error ? error.stack : undefined;
+        ? sanitizeDiagnosticText(error.message)
+        : sanitizeDiagnosticText(String(error));
+  const stack = error instanceof Error && error.stack ? sanitizeDiagnosticText(error.stack) : undefined;
   window.__lovableReportRuntimeError?.({
     message,
     ...(stack !== undefined && { stack }),

@@ -14,13 +14,14 @@ function record(error: unknown) {
 // message, stack, and the full cause chain.
 const CAUSE_DEPTH_LIMIT = 5;
 const DESCRIPTION_LENGTH_LIMIT = 8_000;
+import { sanitizeDiagnosticText } from "./diagnostic-utils";
 
 export function describeError(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
   for (let depth = 0; depth < CAUSE_DEPTH_LIMIT && current != null; depth++) {
     if (!(current instanceof Error)) {
-      parts.push(typeof current === "string" ? current : safeStringify(current));
+      parts.push(typeof current === "string" ? sanitizeDiagnosticText(current) : sanitizeDiagnosticText(safeStringify(current)));
       break;
     }
     const label = depth === 0 ? "" : "caused by: ";
@@ -28,7 +29,7 @@ export function describeError(error: unknown): string {
     parts.push(`${label}${current.stack ?? `${current.name}: ${current.message}`}${status}`);
     current = current.cause;
   }
-  return parts.join("\n").slice(0, DESCRIPTION_LENGTH_LIMIT);
+  return sanitizeDiagnosticText(parts.join("\n")).slice(0, DESCRIPTION_LENGTH_LIMIT);
 }
 
 function describeStatus(error: Error): string {
